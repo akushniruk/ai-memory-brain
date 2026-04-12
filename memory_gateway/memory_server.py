@@ -25,7 +25,6 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
     def _summarize_transcript(self, transcript_path: str, project: str, cwd: str) -> dict:
         """Parse transcript and summarize via Ollama/Gemma4, fallback to rule-based."""
-        import os
         from urllib import error as urllib_error
         from urllib import request as urllib_request
 
@@ -35,7 +34,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
         helper_enabled = os.environ.get("MEMORY_HELPER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
         helper_model = os.environ.get("MEMORY_HELPER_MODEL", "").strip()
         helper_base_url = os.environ.get("MEMORY_HELPER_BASE_URL", "http://127.0.0.1:11434/api/generate")
-        helper_timeout = int(os.environ.get("MEMORY_HELPER_TIMEOUT_SEC", "5"))
+        helper_timeout = int(os.environ.get("MEMORY_HELPER_TIMEOUT_SEC", "15"))
 
         if helper_enabled and helper_model and parsed["goal"]:
             tool_names = ", ".join(parsed["tools"]) if parsed["tools"] else "none"

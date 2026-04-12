@@ -117,7 +117,7 @@ def main() -> int:
         print("{}")
         return 0
 
-    if data.get("status") != "completed" or data.get("loop_count", 0) != 0:
+    if data.get("status") != "completed" or int(data.get("loop_count") or 0) != 0:
         print("{}")
         return 0
 

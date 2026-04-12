@@ -100,13 +100,14 @@ class SummarizeEndpointTests(unittest.TestCase):
         self.assertEqual(result["used_llm"], False)
 
     def test_summarize_rule_based_contains_goal(self) -> None:
+        # Ollama not running in test env → rule-based path executes
         result = self._post("/summarize", {
             "transcript_path": self.transcript_path,
             "project": "test-proj",
             "cwd": self.tmp.name,
         })
         self.assertIn("summary", result)
-        self.assertTrue(len(result["summary"]) > 0)
+        self.assertIn("Add /summarize endpoint", result["summary"])
 
     def test_summarize_unknown_path_returns_404(self) -> None:
         from urllib.error import HTTPError
