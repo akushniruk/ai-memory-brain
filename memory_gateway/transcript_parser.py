@@ -16,7 +16,7 @@ def parse_transcript(path: str) -> dict[str, Any]:
     if not p.exists():
         return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0}
 
-    turns: list[dict] = []
+    turns: list[dict[str, Any]] = []
     try:
         with p.open("r", encoding="utf-8") as f:
             for line in f:
@@ -37,7 +37,10 @@ def parse_transcript(path: str) -> dict[str, Any]:
     goal = ""
     for turn in turns:
         if turn.get("role") == "user":
-            for item in turn.get("message", {}).get("content", []):
+            content = turn.get("message", {}).get("content", [])
+            if not isinstance(content, list):
+                break
+            for item in content:
                 if item.get("type") == "text":
                     goal = item.get("text", "")[:300]
                     break
@@ -52,7 +55,10 @@ def parse_transcript(path: str) -> dict[str, Any]:
     for turn in turns:
         if turn.get("role") != "assistant":
             continue
-        for item in turn.get("message", {}).get("content", []):
+        content = turn.get("message", {}).get("content", [])
+        if not isinstance(content, list):
+            continue
+        for item in content:
             if item.get("type") == "text":
                 text = item.get("text", "").strip()
                 if text:
@@ -77,9 +83,9 @@ def build_rule_based_summary(parsed: dict[str, Any]) -> str:
     """Build a plain-text summary from parsed transcript fields."""
     parts: list[str] = []
     if parsed.get("goal"):
-        parts.append(f"Goal: {parsed['goal'][:200]}")
+        parts.append(f"Goal: {parsed['goal']}")
     if parsed.get("conclusion"):
-        parts.append(f"Concluded: {parsed['conclusion'][:200]}")
+        parts.append(f"Concluded: {parsed['conclusion']}")
     if parsed.get("tools"):
         parts.append(f"Tools: {', '.join(parsed['tools'])}")
     turn_count = parsed.get("turn_count", 0)

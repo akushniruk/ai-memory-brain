@@ -86,6 +86,32 @@ class TranscriptParserTests(unittest.TestCase):
             result = parse_transcript(path)
             self.assertEqual(result["goal"], "")
 
+    def test_parse_conclusion_uses_only_last_two_assistant_texts(self) -> None:
+        three_assistant_lines = [
+            {
+                "role": "user",
+                "message": {"content": [{"type": "text", "text": "Do the thing"}]}
+            },
+            {
+                "role": "assistant",
+                "message": {"content": [{"type": "text", "text": "First action"}]}
+            },
+            {
+                "role": "assistant",
+                "message": {"content": [{"type": "text", "text": "Second action"}]}
+            },
+            {
+                "role": "assistant",
+                "message": {"content": [{"type": "text", "text": "Third action"}]}
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write_transcript(tmp, three_assistant_lines)
+            result = parse_transcript(path)
+            self.assertNotIn("First action", result["conclusion"])
+            self.assertIn("Second action", result["conclusion"])
+            self.assertIn("Third action", result["conclusion"])
+
     def test_build_rule_based_summary(self) -> None:
         parsed = {
             "goal": "Fix routing",
