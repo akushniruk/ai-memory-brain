@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 def _get_free_port() -> int:
     import socket
     with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 

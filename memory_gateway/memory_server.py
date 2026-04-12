@@ -105,7 +105,11 @@ class MemoryHandler(BaseHTTPRequestHandler):
             transcript_path = str(payload.get("transcript_path", ""))
             project = str(payload.get("project", ""))
             cwd = str(payload.get("cwd", ""))
-            result = self._summarize_transcript(transcript_path, project, cwd)
+            try:
+                result = self._summarize_transcript(transcript_path, project, cwd)
+            except Exception as exc:  # pragma: no cover
+                self._write_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
+                return
             self._write_json(HTTPStatus.OK, result)
             return
 
