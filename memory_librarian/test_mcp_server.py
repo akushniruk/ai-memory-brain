@@ -66,7 +66,7 @@ class McpServerTests(unittest.TestCase):
             listed = _rpc(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
             names = {tool["name"] for tool in listed["result"]["tools"]}
             self.assertTrue(
-                {"memory_add", "memory_store_summary", "memory_get_date", "memory_entity_context", "memory_daily_summary"}
+                {"memory_add", "memory_store_summary", "memory_get_date", "memory_entity_context", "memory_daily_summary", "memory_graph_overview", "memory_graph_project_day", "memory_today_graph", "memory_brain_health", "memory_today_summary", "memory_repair_graph"}
                 <= names
             )
         finally:

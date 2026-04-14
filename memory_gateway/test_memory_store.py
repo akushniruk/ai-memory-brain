@@ -6,7 +6,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from memory_store import _normalize_extracted_payload, append_jsonl, normalize_event, should_store_in_graph
+from memory_store import (
+    _build_helper_prompt,
+    _event_date,
+    _normalize_extracted_payload,
+    _project_key,
+    append_jsonl,
+    normalize_event,
+    should_store_in_graph,
+)
 from memory_store import get_events_by_date, get_recent_events, search_events
 
 
@@ -24,6 +32,9 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_should_store_in_graph_for_explicit_prefix(self) -> None:
         self.assertTrue(should_store_in_graph({"kind": "note", "text": "remember: this"}))
+
+    def test_should_store_in_graph_for_milestone(self) -> None:
+        self.assertTrue(should_store_in_graph({"kind": "milestone", "text": "shipped the thing"}))
 
     def test_append_jsonl_writes_single_line(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -75,6 +86,17 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(len(payload["entities"]), 1)
         self.assertEqual(payload["entities"][0]["name"], "Andrew")
         self.assertEqual(payload["relations"], [])
+
+    def test_project_and_date_helpers(self) -> None:
+        self.assertEqual(_project_key(" Yellow-Com "), "yellow-com")
+        self.assertEqual(_event_date("2026-04-13T10:20:30+00:00"), "2026-04-13")
+
+    def test_build_helper_prompt_mentions_json_contract_and_examples(self) -> None:
+        prompt = _build_helper_prompt({"kind": "task_summary", "project": "pharos", "text": "Andrew fixed Neo4j auth."})
+        self.assertIn('Return only strict JSON', prompt)
+        self.assertIn('Example output', prompt)
+        self.assertIn('Andrew fixed Neo4j auth.', prompt)
+        self.assertIn('project=pharos', prompt)
 
 
 if __name__ == "__main__":

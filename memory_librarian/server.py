@@ -21,10 +21,16 @@ if str(_GATEWAY) not in sys.path:
 load_dotenv(_GATEWAY / ".env")
 
 from memory_store import (  # noqa: E402  pylint: disable=wrong-import-position
+    get_brain_health,
     get_entity_context,
     get_events_by_date,
+    get_graph_overview,
+    get_graph_project_day,
     get_graph_recent,
     get_project_context,
+    get_today_graph,
+    get_today_summary,
+    repair_graph,
     get_recent_events,
     persist_event,
     summarize_events_with_helper,
@@ -160,6 +166,87 @@ TOOLS: list[dict[str, Any]] = [
                 **_FORMAT_PROP,
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "memory_graph_overview",
+        "title": "Graph Overview",
+        "description": "Summarize the current memory graph shape: counts, projects, days, and top entities.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 8},
+                **_FORMAT_PROP,
+            },
+        },
+    },
+    {
+        "name": "memory_graph_project_day",
+        "title": "Project Day Graph",
+        "description": "Fetch a graph neighborhood for one project on one day, including memories and linked entities.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "date": {"type": "string", "description": "UTC date prefix, e.g. 2026-04-13"},
+                "limit": {"type": "integer", "default": 12},
+                **_FORMAT_PROP,
+            },
+            "required": ["project", "date"],
+        },
+    },
+    {
+        "name": "memory_today_graph",
+        "title": "Today Graph",
+        "description": "Fetch today's graph neighborhoods. Optionally scope to one project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "default": ""},
+                "date": {"type": "string", "default": "", "description": "Optional override; defaults to current UTC date."},
+                "limit": {"type": "integer", "default": 12},
+                **_FORMAT_PROP,
+            },
+        },
+    },
+    {
+        "name": "memory_brain_health",
+        "title": "Brain Health",
+        "description": "Report graph coverage, helper status, and missing project-day neighborhoods.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 8},
+                **_FORMAT_PROP,
+            },
+        },
+    },
+    {
+        "name": "memory_today_summary",
+        "title": "Today Summary",
+        "description": "Summarize today's memories, optionally scoped to one project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "default": ""},
+                "date": {"type": "string", "default": "", "description": "Optional override; defaults to current UTC date."},
+                **_FORMAT_PROP,
+            },
+        },
+    },
+    {
+        "name": "memory_repair_graph",
+        "title": "Repair Graph",
+        "description": "Backfill missing project-day graph neighborhoods from the JSONL memory log.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 0},
+                "project": {"type": "string", "default": ""},
+                "date": {"type": "string", "default": ""},
+                "missing_only": {"type": "boolean", "default": True},
+                **_FORMAT_PROP,
+            },
         },
     },
     {
@@ -347,6 +434,45 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         limit = int(arguments.get("limit", 8))
         payload = {"query": query, "results": get_entity_context(query, limit=limit)}
         return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_graph_overview":
+        limit = int(arguments.get("limit", 8))
+        payload = {"overview": get_graph_overview(limit=limit)}
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_graph_project_day":
+        project = arguments["project"]
+        date = arguments["date"]
+        limit = int(arguments.get("limit", 12))
+        payload = {"project": project, "date": date, "neighborhood": get_graph_project_day(project, date, limit=limit)}
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_today_graph":
+        project = arguments.get("project", "")
+        date = arguments.get("date", "")
+        limit = int(arguments.get("limit", 12))
+        payload = get_today_graph(project=project, date=date, limit=limit)
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_brain_health":
+        limit = int(arguments.get("limit", 8))
+        payload = get_brain_health(limit=limit)
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_today_summary":
+        project = arguments.get("project", "")
+        date = arguments.get("date", "")
+        payload = get_today_summary(project=project, date=date)
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_repair_graph":
+        payload = repair_graph(
+            limit=int(arguments.get("limit", 0)),
+            project=arguments.get("project", ""),
+            date=arguments.get("date", ""),
+            missing_only=bool(arguments.get("missing_only", True)),
+        )
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
 
     if name == "memory_daily_summary":
         date = arguments["date"]
