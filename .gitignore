@@ -1,0 +1,5 @@
+.run/
+.vscode/
+memory_gateway/.env
+__pycache__/
+*.pyc
