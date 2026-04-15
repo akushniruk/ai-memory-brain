@@ -5,11 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGENT_ID="com.ai-memory-brain.gateway"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/$AGENT_ID.plist"
-RUN_DIR="$ROOT_DIR/.run/memory"
+APP_HOME="${AI_MEMORY_BRAIN_HOME:-$HOME/Library/Application Support/ai-memory-brain}"
+RUN_DIR="$APP_HOME/memory/logs"
 START_SCRIPT="$ROOT_DIR/memory_gateway/start-server.sh"
 
 mkdir -p "$LAUNCH_AGENTS_DIR"
 mkdir -p "$RUN_DIR"
+mkdir -p "$APP_HOME/config" "$APP_HOME/vault"
 
 cat > "$PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

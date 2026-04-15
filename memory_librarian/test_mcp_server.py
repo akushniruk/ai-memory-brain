@@ -24,13 +24,19 @@ class McpServerTests(unittest.TestCase):
         self._log = tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl")
         self._log.close()
         self.log_path = self._log.name
+        self.app_home = tempfile.mkdtemp(prefix="ai-memory-brain-")
         self.env = os.environ.copy()
+        self.env["AI_MEMORY_BRAIN_HOME"] = self.app_home
         self.env["MEMORY_LOG_PATH"] = self.log_path
         self.env["NEO4J_URI"] = ""
 
     def tearDown(self) -> None:
         try:
             os.unlink(self.log_path)
+        except OSError:
+            pass
+        try:
+            __import__("shutil").rmtree(self.app_home)
         except OSError:
             pass
 
@@ -66,7 +72,24 @@ class McpServerTests(unittest.TestCase):
             listed = _rpc(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
             names = {tool["name"] for tool in listed["result"]["tools"]}
             self.assertTrue(
-                {"memory_add", "memory_store_summary", "memory_get_date", "memory_entity_context", "memory_daily_summary", "memory_graph_overview", "memory_graph_project_day", "memory_today_graph", "memory_brain_health", "memory_today_summary", "memory_repair_graph"}
+                {
+                    "memory_add",
+                    "memory_store_summary",
+                    "memory_get_date",
+                    "memory_entity_context",
+                    "memory_daily_summary",
+                    "memory_graph_overview",
+                    "memory_graph_project_day",
+                    "memory_today_graph",
+                    "memory_brain_health",
+                    "memory_today_summary",
+                    "memory_repair_graph",
+                    "memory_vault_status",
+                    "memory_postgres_status",
+                    "memory_review_queue",
+                    "memory_review_approve",
+                    "memory_review_reject",
+                }
                 <= names
             )
         finally:
@@ -186,6 +209,68 @@ class McpServerTests(unittest.TestCase):
             hit = next(item for item in compact_payload["raw_results"] if item["text"].startswith("x"))
             self.assertTrue(hit["text"].endswith("\u2026"))
             self.assertLessEqual(len(hit["text"]), 121)
+
+            milestone = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 8,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_add",
+                        "arguments": {
+                            "text": "Ship review queue operations",
+                            "kind": "milestone",
+                            "source": "test",
+                            "project": "pharos",
+                            "timestamp": "2026-04-05T14:00:00+00:00",
+                        },
+                    },
+                },
+            )
+            self.assertFalse(milestone["result"].get("isError", False))
+
+            queue = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {"name": "memory_review_queue", "arguments": {"status": "pending", "limit": 5}},
+                },
+            )
+            queue_payload = json.loads(queue["result"]["content"][0]["text"])
+            self.assertGreaterEqual(queue_payload["count"], 1)
+            queue_key = queue_payload["items"][0]["queue_key"]
+
+            approve = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 10,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_review_approve",
+                        "arguments": {"queue_key": queue_key, "target": "projects"},
+                    },
+                },
+            )
+            approve_payload = json.loads(approve["result"]["content"][0]["text"])
+            self.assertTrue(approve_payload["ok"])
+            self.assertEqual(approve_payload["status"], "approved")
+
+            vault_status = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "method": "tools/call",
+                    "params": {"name": "memory_vault_status", "arguments": {}},
+                },
+            )
+            vault_payload = json.loads(vault_status["result"]["content"][0]["text"])
+            self.assertTrue(vault_payload["ok"])
+            self.assertGreaterEqual(vault_payload["queue"]["approved"], 1)
         finally:
             if proc.stdin:
                 proc.stdin.close()

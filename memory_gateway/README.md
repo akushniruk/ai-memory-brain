@@ -3,9 +3,30 @@
 Global local memory gateway for Codex, Claude, Cursor and Ollama CLI.
 
 ## What it stores
-- Every event into JSONL
-- Important events into Neo4j
-- Optional entity/relation extraction with local Ollama model
+- Every event into a JSONL ledger
+- Optional vault scaffold beside the ledger
+- Optional structured/index state in Postgres
+- Optional graph projection in Neo4j
+- Optional local extraction/compression with the Gemma librarian via Ollama
+
+Current bridge defaults:
+- `daily_checkin` and `daily_checkout` append into `vault/daily-notes/`
+- `meeting_summary` writes into `vault/meetings/`
+- higher-signal knowledge candidates queue into `vault/memory/review/`
+
+## Default storage home
+
+macOS default:
+
+```bash
+~/Library/Application\ Support/ai-memory-brain/
+```
+
+Layout:
+- `memory/events.jsonl`
+- `memory/logs/`
+- `vault/`
+- `config/`
 
 ## Setup
 ```bash
@@ -15,6 +36,11 @@ source .venv-memory/bin/activate
 pip install -r memory_librarian/requirements.txt
 cp memory_gateway/.env.example memory_gateway/.env
 ```
+
+Important:
+- repo-local `.run` is no longer the default runtime storage location
+- JSONL remains the authoritative first-write path
+- vault and JSONL are colocated in the same app home
 
 ## Start gateway
 ```bash
@@ -47,7 +73,8 @@ This installs:
 
 ## Quick verify
 ```bash
-tail -n 20 /Users/akushniruk/home_projects/ai-memory-brain/.run/memory/events.jsonl
+tail -n 20 ~/Library/Application\ Support/ai-memory-brain/memory/events.jsonl
+ls -la ~/Library/Application\ Support/ai-memory-brain/vault
 ```
 
 Neo4j verify:

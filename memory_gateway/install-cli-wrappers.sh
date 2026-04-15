@@ -6,8 +6,11 @@ BIN_DIR="$HOME/.local/bin"
 CONFIG_DIR="$HOME/.config/ai-memory-brain"
 CONFIG_PATH="$CONFIG_DIR/config.env"
 MARKER="AI_MEMORY_BRAIN_WRAPPER"
+APP_HOME="${AI_MEMORY_BRAIN_HOME:-$HOME/Library/Application Support/ai-memory-brain}"
+PROFILE="${AI_MEMORY_INSTALL_PROFILE:-simple}"
 
 mkdir -p "$BIN_DIR" "$CONFIG_DIR"
+mkdir -p "$APP_HOME/memory/logs" "$APP_HOME/config" "$APP_HOME/vault"
 
 find_real_binary() {
   local tool="$1"
@@ -60,6 +63,9 @@ PYTHON_BIN="$ROOT_DIR/.venv-memory/bin/python"
 REAL_CODEX="$REAL_CODEX"
 REAL_CLAUDE="$REAL_CLAUDE"
 REAL_OLLAMA="$REAL_OLLAMA"
+AI_MEMORY_BRAIN_HOME="$APP_HOME"
+AI_MEMORY_INSTALL_PROFILE="$PROFILE"
+VAULT_PATH="$APP_HOME/vault"
 MEMORY_SERVER_HOST="127.0.0.1"
 MEMORY_SERVER_PORT="8765"
 EOF

@@ -29,6 +29,12 @@ Gemma and the graph are both optional, but both are recommended:
 - `memory_librarian/server.py`: MCP stdio server with memory tools
 - `memory_gateway/`: optional HTTP gateway and CLI helpers for auto-capture
 - Local JSONL memory log
+- Obsidian-compatible vault scaffold stored beside the memory log
+- First vault bridge behavior for safe defaults:
+  - daily check-ins/checkouts auto-write into `vault/daily-notes/`
+  - `meeting_summary` events auto-write into `vault/meetings/`
+  - project/people/reference knowledge starts in `vault/memory/review/`
+- Install profiles: `simple`, `recommended`, `power-user`
 - Optional but recommended Neo4j graph for project/day/entity relationships
 - Optional Ollama helper for local extraction and summarization
 - Optional but recommended Gemma librarian model for much better local entity extraction, summarization, and richer graph links
@@ -38,9 +44,11 @@ Gemma and the graph are both optional, but both are recommended:
 flowchart TD
   U["User"] --> A["Agent: Codex / Cursor / Claude"]
   A --> M["MCP: ai-memory-brain"]
-  M --> J["JSONL log"]
-  M --> G["Neo4j graph (optional)"]
   M --> O["Ollama helper (optional)"]
+  M --> J["JSONL log"]
+  O --> V["Vault bridge (optional)"]
+  O --> P["Postgres index (optional)"]
+  O --> G["Neo4j graph (optional)"]
 ```
 
 ## How it works
@@ -63,6 +71,12 @@ sequenceDiagram
   A->>U: Continue the task with context recovered
   A->>B: memory_store_summary(...) at the end
   B->>J: Save memory event
+  opt Vault bridge enabled
+    B->>V: Auto-write daily notes or meeting notes
+  end
+  opt Postgres enabled
+    B->>P: Save structured/index state
+  end
   opt Graph enabled
     B->>G: Save project/day/entity links
   end
@@ -74,6 +88,24 @@ sequenceDiagram
 ```
 
 ## Installation
+
+### Default app home
+macOS default:
+
+```bash
+~/Library/Application\ Support/ai-memory-brain/
+```
+
+Default layout:
+- `memory/events.jsonl`
+- `memory/logs/`
+- `vault/`
+- `config/`
+
+Current bridge behavior:
+- `daily_checkin` and `daily_checkout` append into `vault/daily-notes/YYYY-MM-DD.md`
+- `meeting_summary` writes a note into `vault/meetings/`
+- review-first knowledge candidates are written into `vault/memory/review/`
 
 ### 1. Clone and set up Python
 ```bash
@@ -87,6 +119,11 @@ cp memory_gateway/.env.example memory_gateway/.env
 
 ### 2. Start with MCP-only mode
 This is the simplest setup and the recommended starting point.
+
+Profile mapping:
+- `simple`: MCP + JSONL + vault scaffold
+- `recommended`: `simple` + Postgres structured/index layer
+- `power-user`: `recommended` + Neo4j graph + Ollama/Gemma librarian
 
 Run the MCP server:
 ```bash
@@ -122,6 +159,7 @@ This is the full setup I recommend and personally use when I want the best exper
 
 Why this setup is better:
 - JSONL gives you the raw durable log
+- Postgres gives you structured/index state without sitting on the hot path
 - the graph makes memory navigable by project, day, entity, and relationship
 - Gemma makes the graph much more useful by extracting better structure from what happened
 - agents get both factual history and connected context
@@ -146,10 +184,14 @@ cp memory_gateway/.env.example memory_gateway/.env
 Set `memory_gateway/.env` like this:
 
 ```dotenv
+AI_MEMORY_BRAIN_HOME=~/Library/Application Support/ai-memory-brain
+AI_MEMORY_INSTALL_PROFILE=power-user
 MEMORY_SERVER_HOST=127.0.0.1
 MEMORY_SERVER_PORT=8765
 MEMORY_GROUP_ID=personal-brain
-MEMORY_LOG_PATH=/absolute/path/to/ai-memory-brain/.run/memory/events.jsonl
+MEMORY_LOG_PATH=~/Library/Application Support/ai-memory-brain/memory/events.jsonl
+VAULT_PATH=~/Library/Application Support/ai-memory-brain/vault
+POSTGRES_DSN=postgresql://localhost/ai_memory_brain
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your-password
@@ -359,7 +401,8 @@ printf '%s\n%s\n' \
 
 Check local storage:
 ```bash
-ls -la .run/memory
+ls -la ~/Library/Application\ Support/ai-memory-brain/memory
+ls -la ~/Library/Application\ Support/ai-memory-brain/vault
 ```
 
 ## Optional: gateway mode

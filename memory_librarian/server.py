@@ -1,26 +1,29 @@
 """
 stdio MCP server — memory librarian on top of memory_gateway/memory_store.
 
-Loads Neo4j + log settings from scripts/memory_gateway/.env when present.
+Loads runtime settings from app-home config with repo .env as fallback.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
-
-from dotenv import load_dotenv
 
 _GATEWAY = Path(__file__).resolve().parent.parent / "memory_gateway"
 if str(_GATEWAY) not in sys.path:
     sys.path.insert(0, str(_GATEWAY))
 
-load_dotenv(_GATEWAY / ".env")
+from runtime_layout import load_runtime_env  # noqa: E402  pylint: disable=wrong-import-position
+
+load_runtime_env(_GATEWAY)
 
 from memory_store import (  # noqa: E402  pylint: disable=wrong-import-position
+    approve_review_queue_item,
+    get_postgres_status,
+    get_review_queue,
+    get_vault_status,
     get_brain_health,
     get_entity_context,
     get_events_by_date,
@@ -33,6 +36,7 @@ from memory_store import (  # noqa: E402  pylint: disable=wrong-import-position
     repair_graph,
     get_recent_events,
     persist_event,
+    reject_review_queue_item,
     summarize_events_with_helper,
     search_events,
     search_graph,
@@ -152,6 +156,60 @@ TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["summary"],
+        },
+    },
+    {
+        "name": "memory_vault_status",
+        "title": "Vault Status",
+        "description": "Report vault bridge health and queue counts.",
+        "inputSchema": {"type": "object", "properties": {**_FORMAT_PROP}},
+    },
+    {
+        "name": "memory_postgres_status",
+        "title": "Postgres Status",
+        "description": "Check Postgres structured/index layer availability.",
+        "inputSchema": {"type": "object", "properties": {**_FORMAT_PROP}},
+    },
+    {
+        "name": "memory_review_queue",
+        "title": "Review Queue",
+        "description": "List vault review items with optional status filter.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "default": "", "description": "pending, approved, rejected, or empty for all"},
+                "limit": {"type": "integer", "default": 50},
+                **_FORMAT_PROP,
+            },
+        },
+    },
+    {
+        "name": "memory_review_approve",
+        "title": "Review Approve",
+        "description": "Approve a review queue item and promote it into vault targets.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "queue_key": {"type": "string"},
+                "target": {"type": "string", "description": "projects, people, or references"},
+                "title": {"type": "string", "default": ""},
+                **_FORMAT_PROP,
+            },
+            "required": ["queue_key", "target"],
+        },
+    },
+    {
+        "name": "memory_review_reject",
+        "title": "Review Reject",
+        "description": "Reject a review queue item with an optional reason.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "queue_key": {"type": "string"},
+                "reason": {"type": "string", "default": ""},
+                **_FORMAT_PROP,
+            },
+            "required": ["queue_key"],
         },
     },
     {
@@ -428,6 +486,36 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         graph_results = search_graph(query, limit=limit, **filters)
         payload = {"query": query, "raw_results": raw_results, "graph_results": graph_results}
         return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_vault_status":
+        payload = get_vault_status()
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_postgres_status":
+        payload = get_postgres_status()
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_review_queue":
+        payload = get_review_queue(
+            status=arguments.get("status", ""),
+            limit=int(arguments.get("limit", 50)),
+        )
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_review_approve":
+        payload = approve_review_queue_item(
+            queue_key=arguments["queue_key"],
+            target=arguments["target"],
+            title=arguments.get("title", ""),
+        )
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
+
+    if name == "memory_review_reject":
+        payload = reject_review_queue_item(
+            queue_key=arguments["queue_key"],
+            reason=arguments.get("reason", ""),
+        )
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
 
     if name == "memory_entity_context":
         query = arguments["query"]

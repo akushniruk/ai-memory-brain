@@ -2,14 +2,13 @@ import json
 import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-from dotenv import load_dotenv
+from pathlib import Path
 
 from memory_store import persist_event
+from runtime_layout import load_runtime_env
 from transcript_parser import build_rule_based_summary, parse_transcript
 
-
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_runtime_env(Path(__file__).resolve().parent)
 
 
 class MemoryHandler(BaseHTTPRequestHandler):

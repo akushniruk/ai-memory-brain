@@ -1,6 +1,6 @@
 import json
 from collections import Counter
-import os
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -9,8 +9,20 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from downstream_sinks import (
+    get_bridge_health,
+    list_review_queue,
+    persist_structured_event,
+    promote_review_item,
+    reject_review_item,
+    sync_event_to_vault,
+)
 from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ServiceUnavailable
+
+from runtime_layout import load_runtime_settings
+
+LOGGER = logging.getLogger(__name__)
 
 
 GRAPH_KINDS = {
@@ -34,9 +46,6 @@ EXTRACT_KINDS = {
     "preference",
     "milestone",
 }
-
-DEFAULT_LOG_PATH = str(Path(__file__).resolve().parents[1] / ".run" / "memory" / "events.jsonl")
-
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -465,29 +474,19 @@ def store_graph_memory(
         except AuthError as exc:
             raise RuntimeError(
                 "Neo4j authentication failed. Update NEO4J_USER/NEO4J_PASSWORD in "
-                "scripts/memory_gateway/.env to match your local Neo4j instance."
+                "your app-home config or memory_gateway/.env to match your local Neo4j instance."
             ) from exc
         except ServiceUnavailable as exc:
             raise RuntimeError(
                 "Neo4j is unavailable at the configured URI. Start Neo4j Desktop and "
-                "verify NEO4J_URI in scripts/memory_gateway/.env."
+                "verify NEO4J_URI in your app-home config or memory_gateway/.env."
             ) from exc
     finally:
         driver.close()
 
 
 def load_settings() -> dict[str, Any]:
-    return {
-        "memory_log_path": os.environ.get("MEMORY_LOG_PATH", DEFAULT_LOG_PATH),
-        "neo4j_uri": os.environ.get("NEO4J_URI", ""),
-        "neo4j_user": os.environ.get("NEO4J_USER", ""),
-        "neo4j_password": os.environ.get("NEO4J_PASSWORD", ""),
-        "group_id": os.environ.get("MEMORY_GROUP_ID", "personal-brain"),
-        "helper_enabled": os.environ.get("MEMORY_HELPER_ENABLED", "0").lower() in ("1", "true", "yes", "on"),
-        "helper_model": os.environ.get("MEMORY_HELPER_MODEL", "").strip(),
-        "helper_base_url": os.environ.get("MEMORY_HELPER_BASE_URL", "http://127.0.0.1:11434/api/generate"),
-        "helper_timeout_sec": int(os.environ.get("MEMORY_HELPER_TIMEOUT_SEC", "15")),
-    }
+    return load_runtime_settings()
 
 
 def _matches_filter(event: dict[str, Any], *, project: str = "", source: str = "", kind: str = "") -> bool:
@@ -981,6 +980,45 @@ def get_today_summary(*, project: str = "", date: str = "") -> dict[str, Any]:
     }
 
 
+def get_vault_status() -> dict[str, Any]:
+    settings = load_settings()
+    return get_bridge_health(settings=settings)
+
+
+def get_review_queue(*, status: str = "", limit: int = 50) -> dict[str, Any]:
+    settings = load_settings()
+    return list_review_queue(settings=settings, status=status, limit=limit)
+
+
+def approve_review_queue_item(*, queue_key: str, target: str, title: str = "") -> dict[str, Any]:
+    settings = load_settings()
+    return promote_review_item(settings=settings, queue_key=queue_key, target=target, title=title)
+
+
+def reject_review_queue_item(*, queue_key: str, reason: str = "") -> dict[str, Any]:
+    settings = load_settings()
+    return reject_review_item(settings=settings, queue_key=queue_key, reason=reason)
+
+
+def get_postgres_status() -> dict[str, Any]:
+    settings = load_settings()
+    dsn = str(settings.get("postgres_dsn", "")).strip()
+    if not dsn:
+        return {"ok": True, "enabled": False, "reachable": False, "reason": "disabled"}
+    try:
+        import psycopg
+    except ImportError:
+        return {"ok": False, "enabled": True, "reachable": False, "reason": "driver_unavailable"}
+    try:
+        with psycopg.connect(dsn, connect_timeout=2, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                row = cur.fetchone()
+        return {"ok": True, "enabled": True, "reachable": bool(row and row[0] == 1), "reason": ""}
+    except Exception:
+        return {"ok": False, "enabled": True, "reachable": False, "reason": "connect_or_query_failed"}
+
+
 def persist_event(event: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings()
     normalized = normalize_event(event)
@@ -988,12 +1026,25 @@ def persist_event(event: dict[str, Any]) -> dict[str, Any]:
 
     stored_in_graph = False
     extracted = {"entities": [], "relations": [], "summary": ""}
+    structured_result = {"attempted": False, "stored": False}
+    vault_result = {"auto_writes": [], "review_items": []}
     neo_ready = bool(settings["neo4j_uri"] and settings["neo4j_user"] and settings["neo4j_password"])
     wants_graph = should_store_in_graph(normalized)
+    wants_extract = normalized.get("kind") in EXTRACT_KINDS or normalized.get("importance") == "high"
+
+    if wants_extract:
+        extracted = _extract_for_event(normalized, settings)
+
+    vault_result = sync_event_to_vault(normalized, settings=settings, knowledge=extracted)
+    structured_result = persist_structured_event(
+        normalized,
+        settings=settings,
+        knowledge=extracted,
+        bridge_result=vault_result,
+    )
 
     if wants_graph and neo_ready:
         try:
-            extracted = _extract_for_event(normalized, settings)
             store_graph_memory(
                 normalized,
                 neo4j_uri=settings["neo4j_uri"],
@@ -1003,14 +1054,17 @@ def persist_event(event: dict[str, Any]) -> dict[str, Any]:
                 knowledge=extracted,
             )
             stored_in_graph = True
-        except RuntimeError:
+        except RuntimeError as exc:
             # JSONL already committed; graph auth or connectivity can be fixed without losing the event.
-            pass
+            LOGGER.warning("Graph persistence skipped after JSONL write for event_id=%s: %s", normalized["id"], exc)
 
     return {
         "ok": True,
         "stored_in_graph": stored_in_graph,
         "extracted_entities": len(extracted.get("entities", [])),
         "extracted_relations": len(extracted.get("relations", [])),
+        "vault_auto_writes": len(vault_result.get("auto_writes", [])),
+        "vault_review_items": len(vault_result.get("review_items", [])),
+        "stored_in_postgres": structured_result.get("stored", False),
         "event": normalized,
     }

@@ -1,12 +1,13 @@
 import argparse
 import json
 import os
+from pathlib import Path
 from urllib import request
 
-from dotenv import load_dotenv
+from runtime_layout import load_runtime_env
 
 
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_runtime_env(Path(__file__).resolve().parent)
 
 
 def main() -> None:

@@ -4,9 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from memory_store import persist_event
+from runtime_layout import load_runtime_env
 
 
 def _project_from_git(cwd: str) -> str:
@@ -22,7 +21,7 @@ def _project_from_git(cwd: str) -> str:
 
 
 def main() -> int:
-    load_dotenv(Path(__file__).resolve().parent / ".env")
+    load_runtime_env(Path(__file__).resolve().parent)
 
     parser = argparse.ArgumentParser(description="Write a milestone memory.")
     parser.add_argument("--text", required=True)
