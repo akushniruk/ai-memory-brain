@@ -9,6 +9,10 @@ Global local memory gateway for Codex, Claude, Cursor and Ollama CLI.
 - Optional graph projection in Neo4j
 - Optional local extraction/compression with the Gemma librarian via Ollama
 
+Default model policy:
+- MCP + local Ollama/Gemma is the default low-cost path
+- paid/high-tier remote models are optional and must be explicitly configured
+
 Current bridge defaults:
 - `daily_checkin` and `daily_checkout` append into `vault/daily-notes/`
 - `meeting_summary` writes into `vault/meetings/`
@@ -101,6 +105,11 @@ Tradeoffs:
 - `recommended`: better structured retrieval/state with local Postgres
 - `power-user`: richest recall and extraction, highest local dependency footprint
 
+Cost posture:
+- Default profile behavior keeps helper off unless power-user mode is selected.
+- In power-user mode, helper defaults to local `gemma4:e2b` via Ollama.
+- If you want paid/high-tier model routing, set that explicitly in your environment and documentation for your team.
+
 Important:
 - repo-local `.run` is no longer the default runtime storage location
 - JSONL remains the authoritative first-write path
@@ -148,6 +157,12 @@ python memory_gateway/meeting_summary.py \
   --text "Retro: capture key decisions and follow-ups." \
   --project "ai-memory-brain" \
   --tags "meeting,retro"
+```
+
+Run manual vault lint (no cron):
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/vault_lint.py
 ```
 
 Neo4j verify:

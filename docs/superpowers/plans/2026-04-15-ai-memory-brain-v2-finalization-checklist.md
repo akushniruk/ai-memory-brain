@@ -72,3 +72,28 @@ Signoff:
 Blocking notes / remaining risks:
 - _______________________________________
 - _______________________________________
+
+## Current evidence snapshot (2026-04-15)
+
+Local validation executed in this workspace:
+- `python3 -m unittest memory_gateway/test_memory_store.py memory_gateway/test_postgres_reads.py`
+  - Result: `Ran 19 tests ... OK`
+- `python3 -m unittest memory_librarian/test_mcp_server.py`
+  - Result: `Ran 3 tests ... OK`
+
+Feature evidence captured in code/docs:
+- Wiki promotion templates upgraded with Obsidian frontmatter/tags/backlinks in `memory_gateway/downstream_sinks.py`.
+- Postgres read surface added via `memory_gateway/postgres_reads.py` and MCP tools in `memory_librarian/server.py`:
+  - `memory_postgres_recent`
+  - `memory_postgres_review_queue`
+  - `memory_postgres_bridge_writes`
+- Manual no-cron vault hygiene added with `python memory_gateway/vault_lint.py`.
+- Default model policy clarified in docs/scripts: local Ollama/Gemma default, paid high-tier model usage opt-in only.
+
+Release decision (current):
+- [ ] `GO`
+- [x] `NO-GO`
+
+Why NO-GO right now:
+- CI status was not re-collected in this run.
+- Cross-owner signoff fields are still unfilled.

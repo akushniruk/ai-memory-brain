@@ -21,6 +21,11 @@ from neo4j import GraphDatabase
 from neo4j.exceptions import AuthError, ServiceUnavailable
 
 from runtime_layout import load_runtime_settings
+from postgres_reads import (
+    list_bridge_writes as list_postgres_bridge_writes,
+    list_recent_events as list_postgres_recent_events,
+    list_review_queue as list_postgres_review_queue,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1017,6 +1022,43 @@ def get_postgres_status() -> dict[str, Any]:
         return {"ok": True, "enabled": True, "reachable": bool(row and row[0] == 1), "reason": ""}
     except Exception:
         return {"ok": False, "enabled": True, "reachable": False, "reason": "connect_or_query_failed"}
+
+
+def get_postgres_recent_events(
+    *,
+    limit: int = 20,
+    project: str = "",
+    source: str = "",
+    kind: str = "",
+    since: str = "",
+) -> dict[str, Any]:
+    settings = load_settings()
+    return list_postgres_recent_events(
+        dsn=str(settings.get("postgres_dsn", "")),
+        limit=limit,
+        project=project,
+        source=source,
+        kind=kind,
+        since=since,
+    )
+
+
+def get_postgres_review_queue(*, status: str = "", limit: int = 50) -> dict[str, Any]:
+    settings = load_settings()
+    return list_postgres_review_queue(
+        dsn=str(settings.get("postgres_dsn", "")),
+        status=status,
+        limit=limit,
+    )
+
+
+def get_postgres_bridge_writes(*, event_id: str = "", limit: int = 50) -> dict[str, Any]:
+    settings = load_settings()
+    return list_postgres_bridge_writes(
+        dsn=str(settings.get("postgres_dsn", "")),
+        event_id=event_id,
+        limit=limit,
+    )
 
 
 def persist_event(event: dict[str, Any]) -> dict[str, Any]:

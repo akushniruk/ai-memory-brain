@@ -306,7 +306,13 @@ def promote_review_item(
         promoted_path,
         marker=event_id,
         section=_promotion_section_for_event(target=target_name, event=event),
-        entry=_render_promoted_entry(event=event),
+        entry=_render_promoted_entry(
+            event=event,
+            settings=settings,
+            review_note_path=review_note,
+            promoted_path=promoted_path,
+            target=target_name,
+        ),
     )
 
     state = _load_review_state(settings)
@@ -696,21 +702,41 @@ def _iter_event_entities(event: dict[str, Any]) -> list[dict[str, Any]]:
     return entities
 
 
-def _render_promoted_entry(*, event: dict[str, Any]) -> str:
-    return "\n".join(
+def _render_promoted_entry(
+    *,
+    event: dict[str, Any],
+    settings: dict[str, Any],
+    review_note_path: Path,
+    promoted_path: Path,
+    target: str,
+) -> str:
+    links = _promotion_links(
+        event=event,
+        settings=settings,
+        review_note_path=review_note_path,
+        promoted_path=promoted_path,
+    )
+    tags = _promotion_tags(event=event, target=target)
+    lines = [
+        f"### {event.get('kind', 'memory')} ({_event_date(event)})",
+        "",
+        f"- Event ID: {event.get('id', '')}",
+        f"- Source: {event.get('source', '')}",
+        f"- Project: {event.get('project', '') or 'unscoped'}",
+        f"- Timestamp: {_event_timestamp(event)}",
+        f"- Tags: {' '.join(tags)}",
+    ]
+    if links:
+        lines.append(f"- Backlinks: {', '.join(links)}")
+    lines.extend(
         [
-            f"### {event.get('kind', 'memory')} ({_event_date(event)})",
-            "",
-            f"- Event ID: {event.get('id', '')}",
-            f"- Source: {event.get('source', '')}",
-            f"- Project: {event.get('project', '') or 'unscoped'}",
-            f"- Timestamp: {_event_timestamp(event)}",
             "",
             "Source memory:",
             "",
             str(event.get("text", "")).strip(),
         ]
-    ).strip()
+    )
+    return "\n".join(lines).strip()
 
 
 def _promotion_section_for_event(*, target: str, event: dict[str, Any]) -> str:
@@ -735,9 +761,17 @@ def _ensure_promoted_note_template(path: Path, *, target: str, event: dict[str, 
     if not display_title:
         display_title = str(event.get("project", "")).strip() or path.stem.replace("-", " ").title()
     if target == "projects":
+        header = f"# Project: {display_title}"
         content = "\n".join(
             [
-                f"# Project: {display_title}",
+                _render_promotion_frontmatter(
+                    title=display_title,
+                    target=target,
+                    event=event,
+                    path=path,
+                ),
+                "",
+                header,
                 "",
                 "## Overview",
                 "",
@@ -752,9 +786,17 @@ def _ensure_promoted_note_template(path: Path, *, target: str, event: dict[str, 
             ]
         )
     elif target == "people":
+        header = f"# Person: {display_title}"
         content = "\n".join(
             [
-                f"# Person: {display_title}",
+                _render_promotion_frontmatter(
+                    title=display_title,
+                    target=target,
+                    event=event,
+                    path=path,
+                ),
+                "",
+                header,
                 "",
                 "## Profile and Preferences",
                 "",
@@ -765,9 +807,17 @@ def _ensure_promoted_note_template(path: Path, *, target: str, event: dict[str, 
             ]
         )
     else:
+        header = f"# Reference: {display_title}"
         content = "\n".join(
             [
-                f"# Reference: {display_title}",
+                _render_promotion_frontmatter(
+                    title=display_title,
+                    target=target,
+                    event=event,
+                    path=path,
+                ),
+                "",
+                header,
                 "",
                 "## Context",
                 "",
@@ -801,6 +851,83 @@ def _append_promoted_entry(path: Path, *, marker: str, section: str, entry: str)
     else:
         rendered = existing[:next_header_idx] + block + existing[next_header_idx:]
     path.write_text(rendered.rstrip() + "\n", encoding="utf-8")
+
+
+def _promotion_tags(*, event: dict[str, Any], target: str) -> list[str]:
+    tags: set[str] = {"#ai-memory", "#promoted"}
+    kind = _slugify(str(event.get("kind", "")).strip())
+    if kind and kind != "memory":
+        tags.add(f"#kind/{kind}")
+    project = _slugify(str(event.get("project", "")).strip())
+    if project and project != "memory":
+        tags.add(f"#project/{project}")
+    importance = str(event.get("importance", "")).strip().lower()
+    if importance in {"low", "normal", "high"}:
+        tags.add(f"#importance/{importance}")
+    tags.add(f"#target/{_slugify(target)}")
+    return sorted(tags)
+
+
+def _promotion_links(
+    *,
+    event: dict[str, Any],
+    settings: dict[str, Any],
+    review_note_path: Path,
+    promoted_path: Path,
+) -> list[str]:
+    vault_root = Path(settings["vault_path"]).expanduser()
+    links: list[str] = []
+
+    review_link = _as_wikilink(from_path=promoted_path, to_path=review_note_path, vault_root=vault_root)
+    if review_link:
+        links.append(review_link)
+
+    daily_path = _daily_note_path(vault_root, event)
+    if daily_path.exists():
+        daily_link = _as_wikilink(from_path=promoted_path, to_path=daily_path, vault_root=vault_root)
+        if daily_link:
+            links.append(daily_link)
+
+    if event.get("kind") == "meeting_summary":
+        meeting_path = _meeting_note_path(vault_root, event)
+        if meeting_path.exists():
+            meeting_link = _as_wikilink(from_path=promoted_path, to_path=meeting_path, vault_root=vault_root)
+            if meeting_link:
+                links.append(meeting_link)
+
+    return links
+
+
+def _as_wikilink(*, from_path: Path, to_path: Path, vault_root: Path) -> str:
+    try:
+        relative = to_path.relative_to(vault_root)
+    except ValueError:
+        return ""
+    rel_no_suffix = relative.with_suffix("")
+    return f"[[{rel_no_suffix.as_posix()}]]"
+
+
+def _render_promotion_frontmatter(*, title: str, target: str, event: dict[str, Any], path: Path) -> str:
+    created = _event_timestamp(event) or str(event.get("timestamp", ""))
+    project = str(event.get("project", "")).strip() or "unscoped"
+    fields = [
+        "---",
+        f'title: "{_yaml_escape(title)}"',
+        f"type: {target[:-1] if target.endswith('s') else target}",
+        f'slug: "{_yaml_escape(path.stem)}"',
+        f'project: "{_yaml_escape(project)}"',
+        f'created: "{_yaml_escape(created)}"',
+        "memory_event_ids: []",
+        "tags:",
+    ]
+    for tag in _promotion_tags(event=event, target=target):
+        fields.append(f'  - "{_yaml_escape(tag)}"')
+    fields.append("---")
+    return "\n".join(fields)
+
+
+def _yaml_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _count_markdown_files(path: Path) -> int:

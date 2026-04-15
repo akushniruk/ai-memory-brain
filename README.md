@@ -25,6 +25,10 @@ Gemma and the graph are both optional, but both are recommended:
 - Graph: makes recall structured instead of flat, so project/day/entity relationships stay connected
 - Gemma librarian: improves extraction, summaries, and semantic links inside the graph
 
+Default model policy:
+- local Ollama/Gemma is the default path when helper extraction is enabled
+- paid/high-tier providers are opt-in only and should never be silently selected
+
 ## What it includes
 - `memory_librarian/server.py`: MCP stdio server with memory tools
 - `memory_gateway/`: optional HTTP gateway and CLI helpers for auto-capture
@@ -447,6 +451,14 @@ Good default workflow for agents:
 - `memory_today_graph`
 - `memory_brain_health`
 - `memory_repair_graph`
+- `memory_vault_status`
+- `memory_postgres_status`
+- `memory_postgres_recent`
+- `memory_postgres_review_queue`
+- `memory_postgres_bridge_writes`
+- `memory_review_queue`
+- `memory_review_approve`
+- `memory_review_reject`
 
 ## Verification
 Check that the MCP server starts:
@@ -504,6 +516,12 @@ Optional installers:
 - `memory_gateway/install-cli-wrappers.sh`
 - `memory_gateway/install-launch-agent.sh`
 - `memory_gateway/install-cursor-global.sh`
+
+Manual vault hygiene (no scheduler):
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/vault_lint.py
+```
 
 ## Daily check-in / checkout
 These write memory entries without opening the MCP UI.

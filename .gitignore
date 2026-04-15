@@ -1,5 +1,7 @@
 .run/
+.tmp-memory/
 .vscode/
+.cursor/
 memory_gateway/.env
 __pycache__/
 *.pyc

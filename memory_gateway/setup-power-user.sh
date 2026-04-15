@@ -123,4 +123,5 @@ echo "Verifying power-user profile"
 "$ROOT_DIR/memory_gateway/verify-profile.sh" --profile power-user --app-home "$APP_HOME"
 
 echo "Power-user setup complete."
+echo "Default helper model is local Ollama '$HELPER_MODEL'; paid/high-tier models require explicit opt-in."
 echo "Start gateway: memory_gateway/start-server.sh"

@@ -99,6 +99,9 @@ EOF
 
 echo "Installed profile: $PROFILE"
 echo "Config file: $CONFIG_PATH"
+if [[ "$PROFILE" == "power-user" ]]; then
+  echo "Helper default: local Ollama model '$HELPER_MODEL' (paid/high-tier providers are opt-in)."
+fi
 echo "Next: memory_gateway/verify-profile.sh --profile $PROFILE --app-home \"$APP_HOME\""
 echo "Then start: memory_gateway/start-server.sh"
 

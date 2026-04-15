@@ -314,6 +314,14 @@ class MemoryStoreTests(unittest.TestCase):
                 self.assertTrue(Path(approved["promoted_path"]).exists())
                 promoted_path = Path(approved["promoted_path"])
                 self.assertEqual(promoted_path.name, "jsonl-first-decision.md")
+                promoted_content = promoted_path.read_text(encoding="utf-8")
+                self.assertIn("---\n", promoted_content)
+                self.assertIn('title: "jsonl-first-decision"', promoted_content)
+                self.assertIn("memory_event_ids: []", promoted_content)
+                self.assertIn("tags:", promoted_content)
+                self.assertIn("#project/ai-memory-brain", promoted_content)
+                self.assertIn("#target/projects", promoted_content)
+                self.assertIn("[[memory/review/", promoted_content)
 
                 persist_event(
                     {
@@ -341,6 +349,7 @@ class MemoryStoreTests(unittest.TestCase):
                 merged_content = promoted_path.read_text(encoding="utf-8")
                 self.assertEqual(merged_content.count("<!-- ai-memory-event:evt-review-1 -->"), 1)
                 self.assertEqual(merged_content.count("<!-- ai-memory-event:evt-review-3 -->"), 1)
+                self.assertIn("#target/projects", merged_content)
 
                 persist_event(
                     {
@@ -372,6 +381,9 @@ class MemoryStoreTests(unittest.TestCase):
                 )
                 self.assertTrue(approved_people["ok"])
                 self.assertEqual(Path(approved_people["promoted_path"]).name, "andrew-kushniruk.md")
+                people_content = Path(approved_people["promoted_path"]).read_text(encoding="utf-8")
+                self.assertIn("#target/people", people_content)
+                self.assertIn("[[memory/review/", people_content)
 
                 persist_event(
                     {
@@ -403,6 +415,9 @@ class MemoryStoreTests(unittest.TestCase):
                 )
                 self.assertTrue(approved_references["ok"])
                 self.assertEqual(Path(approved_references["promoted_path"]).name, "graphiti-mcp-docs.md")
+                references_content = Path(approved_references["promoted_path"]).read_text(encoding="utf-8")
+                self.assertIn("#target/references", references_content)
+                self.assertIn("[[memory/review/", references_content)
 
                 persist_event(
                     {

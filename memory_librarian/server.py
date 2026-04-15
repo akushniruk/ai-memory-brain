@@ -22,6 +22,9 @@ load_runtime_env(_GATEWAY)
 from memory_store import (  # noqa: E402  pylint: disable=wrong-import-position
     approve_review_queue_item,
     get_postgres_status,
+    get_postgres_recent_events,
+    get_postgres_review_queue,
+    get_postgres_bridge_writes,
     get_review_queue,
     get_vault_status,
     get_brain_health,
@@ -193,6 +196,48 @@ TOOLS: list[dict[str, Any]] = [
         "title": "Postgres Status",
         "description": "Check Postgres structured/index layer availability.",
         "inputSchema": {"type": "object", "properties": {**_FORMAT_PROP}},
+    },
+    {
+        "name": "memory_postgres_recent",
+        "title": "Postgres Recent",
+        "description": "Read recent structured events from Postgres (JSONL remains canonical).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "default": 20},
+                "project": {"type": "string", "default": ""},
+                "source": {"type": "string", "default": ""},
+                "kind": {"type": "string", "default": ""},
+                "since": {"type": "string", "default": "", "description": "ISO-8601 lower time bound."},
+                **_FORMAT_PROP,
+            },
+        },
+    },
+    {
+        "name": "memory_postgres_review_queue",
+        "title": "Postgres Review Queue",
+        "description": "Read review queue rows from Postgres (JSONL/vault remain source of truth).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "default": "", "description": "pending, approved, rejected, or empty for all"},
+                "limit": {"type": "integer", "default": 50},
+                **_FORMAT_PROP,
+            },
+        },
+    },
+    {
+        "name": "memory_postgres_bridge_writes",
+        "title": "Postgres Bridge Writes",
+        "description": "Read bridge write provenance rows from Postgres by event id or recent history.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "default": ""},
+                "limit": {"type": "integer", "default": 50},
+                **_FORMAT_PROP,
+            },
+        },
     },
     {
         "name": "memory_review_queue",
@@ -555,6 +600,30 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     if name == "memory_postgres_status":
         payload = get_postgres_status()
         return _tool_result(_maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_postgres_recent":
+        payload = get_postgres_recent_events(
+            limit=int(arguments.get("limit", 20)),
+            project=arguments.get("project", ""),
+            source=arguments.get("source", ""),
+            kind=arguments.get("kind", ""),
+            since=arguments.get("since", ""),
+        )
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
+
+    if name == "memory_postgres_review_queue":
+        payload = get_postgres_review_queue(
+            status=arguments.get("status", ""),
+            limit=int(arguments.get("limit", 50)),
+        )
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
+
+    if name == "memory_postgres_bridge_writes":
+        payload = get_postgres_bridge_writes(
+            event_id=arguments.get("event_id", ""),
+            limit=int(arguments.get("limit", 50)),
+        )
+        return _tool_result(_maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
 
     if name == "memory_review_queue":
         payload = get_review_queue(
