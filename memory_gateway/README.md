@@ -68,6 +68,11 @@ memory_gateway/install-profile.sh \
 memory_gateway/verify-profile.sh --profile power-user
 ```
 
+Verify expectations and common errors by profile:
+- `simple` verifies config file and app-home folders exist, then verifies MCP startup. Typical failures: `Missing config file...`, `Missing: ...`, `MCP server verify failed...`.
+- `recommended` verifies everything in `simple`, requires `POSTGRES_DSN`, and actively probes Postgres (`SELECT 1`) when `psycopg` is installed. Typical failures: `Recommended/Power-user require POSTGRES_DSN...`, `FAIL: Postgres probe failed...`.
+- `power-user` verifies everything in `recommended`, requires Neo4j/helper env vars, probes Neo4j TCP reachability (and auth when Python `neo4j` driver is installed), and probes Ollama at `/api/tags` with timeout. Typical failures: `Power-user requires ...`, `FAIL: Neo4j ...`, `FAIL: Ollama probe failed ...`.
+
 Tradeoffs:
 - `simple`: lowest setup complexity, no Postgres/Neo4j/helper requirements
 - `recommended`: better structured retrieval/state with local Postgres

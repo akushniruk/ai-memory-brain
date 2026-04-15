@@ -148,6 +148,11 @@ memory_gateway/install-profile.sh \
 memory_gateway/verify-profile.sh --profile power-user
 ```
 
+Profile verify expectations and common failures:
+- `simple` expects app-home layout (`memory/`, `vault/`, `config/`) and MCP startup check to pass. Fails with `Missing ...` for layout/config issues, or `MCP server verify failed...` when Python deps/startup are broken.
+- `recommended` includes all `simple` checks, requires `POSTGRES_DSN`, and runs an active Postgres probe (`SELECT 1`) when `psycopg` is installed. Fails with `Recommended/Power-user require POSTGRES_DSN...` or `FAIL: Postgres probe failed...`.
+- `power-user` includes all `recommended` checks, requires `NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD`, `MEMORY_HELPER_ENABLED=1`, and `MEMORY_HELPER_MODEL`, then probes Neo4j (TCP, plus auth probe when `neo4j` Python driver is installed) and Ollama (`/api/tags`, 3s timeout). Fails with `Power-user requires ...`, `FAIL: Neo4j ...`, or `FAIL: Ollama probe failed ...`.
+
 Run the MCP server:
 ```bash
 source .venv-memory/bin/activate

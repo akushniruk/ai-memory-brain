@@ -640,11 +640,60 @@ def _promotion_note_path(
     elif target == "projects":
         base = str(event.get("project", "")).strip() or "unscoped-project"
     elif target == "people":
-        base = str(event.get("project", "")).strip() or "people-knowledge"
+        base = _preferred_entity_name(event=event, target=target) or str(event.get("project", "")).strip() or "people-knowledge"
     else:
-        base = str(event.get("project", "")).strip() or "references"
+        base = _preferred_entity_name(event=event, target=target) or str(event.get("project", "")).strip() or "references"
     slug = _slugify(base)
     return target_dir / f"{slug}.md"
+
+
+def _preferred_entity_name(*, event: dict[str, Any], target: str) -> str:
+    if target == "people":
+        target_types = {"person", "people", "human", "user", "individual"}
+    elif target == "references":
+        target_types = {"repo", "repository", "tool", "reference", "document", "library", "package", "sdk", "framework"}
+    else:
+        return ""
+
+    for entity in _iter_event_entities(event):
+        entity_name = str(entity.get("name", "")).strip()
+        if not entity_name:
+            continue
+        entity_type = str(
+            entity.get("entity_type") or entity.get("type") or entity.get("kind") or entity.get("category") or ""
+        ).strip().lower()
+        if entity_type in target_types:
+            return entity_name
+    return ""
+
+
+def _iter_event_entities(event: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata = event.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    candidates: list[Any] = [
+        event.get("entities"),
+        event.get("knowledge", {}).get("entities") if isinstance(event.get("knowledge"), dict) else None,
+        metadata.get("entities"),
+        metadata.get("knowledge", {}).get("entities") if isinstance(metadata.get("knowledge"), dict) else None,
+        metadata.get("review_payload", {}).get("entities") if isinstance(metadata.get("review_payload"), dict) else None,
+        (
+            metadata.get("review", {}).get("payload", {}).get("entities")
+            if isinstance(metadata.get("review"), dict)
+            and isinstance(metadata.get("review", {}).get("payload"), dict)
+            else None
+        ),
+    ]
+
+    entities: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, list):
+            continue
+        for entity in item:
+            if isinstance(entity, dict):
+                entities.append(entity)
+    return entities
 
 
 def _render_promoted_entry(*, event: dict[str, Any]) -> str:

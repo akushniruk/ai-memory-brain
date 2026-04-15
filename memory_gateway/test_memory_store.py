@@ -344,6 +344,68 @@ class MemoryStoreTests(unittest.TestCase):
 
                 persist_event(
                     {
+                        "id": "evt-review-people-1",
+                        "timestamp": "2026-04-15T20:11:00+00:00",
+                        "source": "manual",
+                        "kind": "identity",
+                        "text": "Captured teammate profile details.",
+                        "project": "ai-memory-brain",
+                        "cwd": "/tmp/project",
+                        "importance": "high",
+                        "tags": ["identity"],
+                        "metadata": {
+                            "review_payload": {
+                                "entities": [
+                                    {"name": "Primary Repo", "entity_type": "repo"},
+                                    {"name": "Andrew Kushniruk", "entity_type": "person"},
+                                    {"name": "Cursor", "entity_type": "tool"},
+                                ]
+                            }
+                        },
+                    }
+                )
+                queue_people = get_review_queue(status="pending", limit=10)
+                self.assertEqual(queue_people["count"], 1)
+                approved_people = approve_review_queue_item(
+                    queue_key=queue_people["items"][0]["queue_key"],
+                    target="people",
+                )
+                self.assertTrue(approved_people["ok"])
+                self.assertEqual(Path(approved_people["promoted_path"]).name, "andrew-kushniruk.md")
+
+                persist_event(
+                    {
+                        "id": "evt-review-ref-1",
+                        "timestamp": "2026-04-15T20:12:00+00:00",
+                        "source": "manual",
+                        "kind": "project_fact",
+                        "text": "Documented tooling references.",
+                        "project": "ai-memory-brain",
+                        "cwd": "/tmp/project",
+                        "importance": "high",
+                        "tags": ["reference"],
+                        "metadata": {
+                            "knowledge": {
+                                "entities": [
+                                    {"name": "Andrew Kushniruk", "entity_type": "person"},
+                                    {"name": "Graphiti MCP Docs", "entity_type": "document"},
+                                    {"name": "GitHub", "entity_type": "tool"},
+                                ]
+                            }
+                        },
+                    }
+                )
+                queue_references = get_review_queue(status="pending", limit=10)
+                self.assertEqual(queue_references["count"], 1)
+                approved_references = approve_review_queue_item(
+                    queue_key=queue_references["items"][0]["queue_key"],
+                    target="references",
+                )
+                self.assertTrue(approved_references["ok"])
+                self.assertEqual(Path(approved_references["promoted_path"]).name, "graphiti-mcp-docs.md")
+
+                persist_event(
+                    {
                         "id": "evt-review-2",
                         "timestamp": "2026-04-15T20:15:00+00:00",
                         "source": "manual",
@@ -367,7 +429,7 @@ class MemoryStoreTests(unittest.TestCase):
 
                 health = get_vault_status()
                 self.assertTrue(health["ok"])
-                self.assertEqual(health["queue"]["approved"], 2)
+                self.assertEqual(health["queue"]["approved"], 3)
                 self.assertEqual(health["queue"]["rejected"], 1)
             finally:
                 if old_home is None:

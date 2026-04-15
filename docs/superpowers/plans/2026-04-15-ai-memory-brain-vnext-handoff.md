@@ -11,6 +11,7 @@
 - Focused tests are green:
   - `source .venv-memory/bin/activate && python -m unittest memory_gateway/test_memory_store.py memory_librarian/test_mcp_server.py`
   - Result: `16` tests passed
+- Final release gate checklist: [2026-04-15-ai-memory-brain-v2-finalization-checklist.md](/Users/akushniruk/home_projects/ai-memory-brain/docs/superpowers/plans/2026-04-15-ai-memory-brain-v2-finalization-checklist.md)
 
 ## Locked architecture decisions
 - JSONL is the authoritative first-write path
