@@ -159,6 +159,30 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "memory_meeting_summary",
+        "title": "Store Meeting Summary",
+        "description": "Persist a meeting_summary memory event (JSONL-first with existing downstream bridge behavior).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "source": {"type": "string", "default": "agent"},
+                "project": {"type": "string", "default": ""},
+                "cwd": {"type": "string", "default": ""},
+                "branch": {"type": "string", "default": ""},
+                "importance": {"type": "string", "enum": ["low", "normal", "high"], "default": "normal"},
+                "tags": {"type": "array", "items": {"type": "string"}, "default": []},
+                "graph": {"type": "boolean", "default": False},
+                "metadata": {"type": "object", "default": {}},
+                "timestamp": {
+                    "type": "string",
+                    "description": "Optional ISO-8601 timestamp; defaults to current UTC",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    {
         "name": "memory_vault_status",
         "title": "Vault Status",
         "description": "Report vault bridge health and queue counts.",
@@ -436,6 +460,26 @@ def _merge_metadata(arguments: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def _validated_importance(arguments: dict[str, Any]) -> str:
+    value = str(arguments.get("importance", "normal"))
+    if value not in {"low", "normal", "high"}:
+        raise ValueError("importance must be one of: low, normal, high")
+    return value
+
+
+def _validated_tags(arguments: dict[str, Any]) -> list[str]:
+    raw_tags = arguments.get("tags", [])
+    if not isinstance(raw_tags, list):
+        raise ValueError("tags must be an array of strings")
+    tags: list[str] = []
+    for item in raw_tags:
+        if not isinstance(item, str):
+            raise ValueError("tags must be an array of strings")
+        if item.strip():
+            tags.append(item.strip())
+    return tags
+
+
 def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     fmt = str(arguments.get("format", "full"))
     max_text = int(arguments.get("max_text_chars", 400))
@@ -466,6 +510,23 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             "cwd": arguments.get("cwd", ""),
             "importance": arguments.get("importance", "normal"),
             "tags": arguments.get("tags", []),
+            "graph": arguments.get("graph", False),
+            "metadata": _merge_metadata(arguments),
+        }
+        if arguments.get("timestamp"):
+            payload["timestamp"] = arguments["timestamp"]
+        result = persist_event(payload)
+        return _tool_result(result)
+
+    if name == "memory_meeting_summary":
+        payload = {
+            "text": arguments["text"],
+            "kind": "meeting_summary",
+            "source": arguments.get("source", "agent"),
+            "project": arguments.get("project", ""),
+            "cwd": arguments.get("cwd", ""),
+            "importance": _validated_importance(arguments),
+            "tags": _validated_tags(arguments),
             "graph": arguments.get("graph", False),
             "metadata": _merge_metadata(arguments),
         }

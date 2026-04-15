@@ -458,6 +458,20 @@ python memory_gateway/daily_checkout.py \
   --summary "Daily checkout:\n- Goal: ...\n- Changes made: ...\n- Decisions: ...\n- Validation: ...\n- Risks / TODO: ..."
 ```
 
+Meeting summaries from CLI:
+
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/meeting_summary.py \
+  --text "Weekly sync: finalized rollout milestones and owners." \
+  --project "ai-memory-brain" \
+  --importance normal \
+  --tags "meeting,weekly-sync"
+```
+
+Meeting summaries from MCP:
+- call `memory_meeting_summary` with `text` (+ optional `project`, `source`, `importance`, `tags`, `graph`)
+
 ## Graph shape
 ```mermaid
 flowchart TD

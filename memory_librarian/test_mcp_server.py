@@ -75,6 +75,7 @@ class McpServerTests(unittest.TestCase):
                 {
                     "memory_add",
                     "memory_store_summary",
+                    "memory_meeting_summary",
                     "memory_get_date",
                     "memory_entity_context",
                     "memory_daily_summary",
@@ -179,6 +180,89 @@ class McpServerTests(unittest.TestCase):
                 },
             )
             self.assertFalse(summary["result"].get("isError", False))
+
+            meeting_summary = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 51,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_meeting_summary",
+                        "arguments": {"text": "Sync covered launch blockers.", "project": "pharos"},
+                    },
+                },
+            )
+            self.assertFalse(meeting_summary["result"].get("isError", False))
+            meeting_payload = json.loads(meeting_summary["result"]["content"][0]["text"])
+            self.assertTrue(meeting_payload["ok"])
+            self.assertEqual(meeting_payload["event"]["kind"], "meeting_summary")
+
+            meeting_with_metadata = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 52,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_meeting_summary",
+                        "arguments": {
+                            "text": "Timestamp + branch metadata test",
+                            "project": "pharos",
+                            "timestamp": "2026-04-05T16:00:00+00:00",
+                            "branch": "feature/review-flow",
+                        },
+                    },
+                },
+            )
+            self.assertFalse(meeting_with_metadata["result"].get("isError", False))
+            meta_payload = json.loads(meeting_with_metadata["result"]["content"][0]["text"])
+            self.assertEqual(meta_payload["event"]["timestamp"], "2026-04-05T16:00:00+00:00")
+            self.assertEqual(meta_payload["event"]["metadata"]["branch"], "feature/review-flow")
+
+            missing_text = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 53,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_meeting_summary",
+                        "arguments": {"project": "pharos"},
+                    },
+                },
+            )
+            self.assertTrue("error" in missing_text or missing_text["result"].get("isError", False))
+
+            bad_importance = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 54,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_meeting_summary",
+                        "arguments": {"text": "bad importance", "importance": "urgent"},
+                    },
+                },
+            )
+            self.assertTrue(bad_importance["result"].get("isError", False))
+            self.assertIn("importance must be one of", bad_importance["result"]["content"][0]["text"])
+
+            bad_tags = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 55,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_meeting_summary",
+                        "arguments": {"text": "bad tags", "tags": "ops,team"},
+                    },
+                },
+            )
+            self.assertTrue(bad_tags["result"].get("isError", False))
+            self.assertIn("tags must be an array of strings", bad_tags["result"]["content"][0]["text"])
 
             long_text = "x" * 800
             _rpc(

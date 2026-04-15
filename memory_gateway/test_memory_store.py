@@ -230,6 +230,52 @@ class MemoryStoreTests(unittest.TestCase):
                 else:
                     os.environ["MEMORY_HELPER_MODEL"] = old_helper_model
 
+    def test_persist_event_meeting_summary_writes_idempotent_meeting_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            old_helper_enabled = os.environ.get("MEMORY_HELPER_ENABLED")
+            old_helper_model = os.environ.get("MEMORY_HELPER_MODEL")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            os.environ["MEMORY_HELPER_ENABLED"] = "0"
+            os.environ.pop("MEMORY_HELPER_MODEL", None)
+            try:
+                event = {
+                    "id": "evt-meeting-1",
+                    "timestamp": "2026-04-15T12:30:00+00:00",
+                    "source": "manual",
+                    "kind": "meeting_summary",
+                    "text": "Discussed migration milestones and rollout sequencing.",
+                    "project": "ai-memory-brain",
+                    "cwd": "/tmp/project",
+                    "importance": "normal",
+                    "tags": ["meeting"],
+                    "metadata": {},
+                }
+                first = persist_event(event)
+                second = persist_event(event)
+                meetings_dir = Path(tmp_dir) / "vault" / "meetings"
+                notes = list(meetings_dir.glob("*.md"))
+                self.assertEqual(len(notes), 1)
+                content = notes[0].read_text(encoding="utf-8")
+                self.assertTrue(first["ok"])
+                self.assertEqual(first["vault_auto_writes"], 1)
+                self.assertEqual(second["vault_auto_writes"], 1)
+                self.assertEqual(content.count("<!-- ai-memory-event:evt-meeting-1 -->"), 1)
+                self.assertIn("Discussed migration milestones and rollout sequencing.", content)
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+                if old_helper_enabled is None:
+                    os.environ.pop("MEMORY_HELPER_ENABLED", None)
+                else:
+                    os.environ["MEMORY_HELPER_ENABLED"] = old_helper_enabled
+                if old_helper_model is None:
+                    os.environ.pop("MEMORY_HELPER_MODEL", None)
+                else:
+                    os.environ["MEMORY_HELPER_MODEL"] = old_helper_model
+
     def test_review_queue_promote_and_reject_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")

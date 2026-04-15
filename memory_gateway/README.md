@@ -77,6 +77,15 @@ tail -n 20 ~/Library/Application\ Support/ai-memory-brain/memory/events.jsonl
 ls -la ~/Library/Application\ Support/ai-memory-brain/vault
 ```
 
+Create a meeting summary event directly:
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/meeting_summary.py \
+  --text "Retro: capture key decisions and follow-ups." \
+  --project "ai-memory-brain" \
+  --tags "meeting,retro"
+```
+
 Neo4j verify:
 ```cypher
 MATCH (g:MemoryGroup)-[:HAS_MEMORY]->(m:Memory)
