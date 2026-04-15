@@ -1,7 +1,12 @@
 .run/
 .tmp-memory/
 .vscode/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/*.mdc
+!.cursor/skills/
+!.cursor/skills/**/
+!.cursor/skills/**/SKILL.md
 memory_gateway/.env
 __pycache__/
 *.pyc

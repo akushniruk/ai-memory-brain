@@ -58,6 +58,41 @@ set +a
 echo "Profile: ${AI_MEMORY_INSTALL_PROFILE:-unknown}"
 echo "App home: ${AI_MEMORY_BRAIN_HOME:-$APP_HOME}"
 
+APP_HOME_ABS="$(python - "$APP_HOME" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+)"
+MEMORY_LOG_ABS="$(python - "${MEMORY_LOG_PATH:-}" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+)"
+VAULT_PATH_ABS="$(python - "${VAULT_PATH:-}" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+)"
+ROOT_DIR_ABS="$(python - "$ROOT_DIR" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve())
+PY
+)"
+
+if [[ "$MEMORY_LOG_ABS" == "$ROOT_DIR_ABS/"* || "$VAULT_PATH_ABS" == "$ROOT_DIR_ABS/"* ]]; then
+  fail "Detected project-local memory paths (MEMORY_LOG_PATH or VAULT_PATH under repo root). Use app-home paths under $APP_HOME_ABS."
+fi
+
+if [[ "$MEMORY_LOG_ABS" != "$APP_HOME_ABS/"* || "$VAULT_PATH_ABS" != "$APP_HOME_ABS/"* ]]; then
+  fail "MEMORY_LOG_PATH and VAULT_PATH must live under app-home ($APP_HOME_ABS)."
+fi
+
+echo "OK: runtime paths are app-home scoped"
+
 test -d "$APP_HOME/memory" || { echo "Missing: $APP_HOME/memory" >&2; exit 1; }
 test -d "$APP_HOME/vault" || { echo "Missing: $APP_HOME/vault" >&2; exit 1; }
 test -d "$APP_HOME/config" || { echo "Missing: $APP_HOME/config" >&2; exit 1; }

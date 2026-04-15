@@ -1,0 +1,25 @@
+---
+description: Enforce AI Memory Brain default operating posture
+alwaysApply: true
+---
+
+# AI Memory Brain Defaults
+
+Use this workflow by default in this repository:
+
+1. Model posture
+- Prefer local Ollama/Gemma whenever helper/model inference is needed.
+- Do not switch to paid/high-tier providers unless the user explicitly opts in.
+
+2. Storage/retrieval posture
+- Treat JSONL as canonical first-write durability.
+- Use Postgres MCP read tools for structured retrieval when filters/ranges are needed.
+- Keep Neo4j as optional projection/relationship recall.
+
+3. Hygiene posture
+- Do not introduce cron/scheduled jobs for vault maintenance.
+- Prefer explicit, on-demand hygiene commands (for example `python memory_gateway/vault_lint.py`).
+
+4. Documentation posture
+- Keep user-facing docs aligned with the above defaults.
+- If behavior changes, update docs in the same task.
