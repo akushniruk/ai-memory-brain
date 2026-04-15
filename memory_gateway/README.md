@@ -68,6 +68,29 @@ memory_gateway/install-profile.sh \
 memory_gateway/verify-profile.sh --profile power-user
 ```
 
+One-command guided bootstrap for power-user (handles common setup issues):
+```bash
+cd /Users/akushniruk/home_projects/ai-memory-brain
+memory_gateway/setup-power-user.sh --neo4j-password "<your-neo4j-password>"
+```
+
+Agent prompt users can paste:
+```text
+Set up AI Memory Brain power-user mode in this repo:
+/Users/akushniruk/home_projects/ai-memory-brain
+
+Run:
+1) memory_gateway/setup-power-user.sh --neo4j-password "<REAL_NEO4J_PASSWORD>"
+2) memory_gateway/start-server.sh
+3) curl http://127.0.0.1:8765/health
+
+Return:
+- Postgres status
+- Neo4j auth status
+- Ollama tags endpoint status
+- final gateway health JSON
+```
+
 Verify expectations and common errors by profile:
 - `simple` verifies config file and app-home folders exist, then verifies MCP startup. Typical failures: `Missing config file...`, `Missing: ...`, `MCP server verify failed...`.
 - `recommended` verifies everything in `simple`, requires `POSTGRES_DSN`, and actively probes Postgres (`SELECT 1`) when `psycopg` is installed. Typical failures: `Recommended/Power-user require POSTGRES_DSN...`, `FAIL: Postgres probe failed...`.

@@ -148,6 +148,11 @@ memory_gateway/install-profile.sh \
 memory_gateway/verify-profile.sh --profile power-user
 ```
 
+If power-user setup fails due to local Postgres initialization or config drift, use:
+```bash
+memory_gateway/setup-power-user.sh --neo4j-password "<your-neo4j-password>"
+```
+
 Profile verify expectations and common failures:
 - `simple` expects app-home layout (`memory/`, `vault/`, `config/`) and MCP startup check to pass. Fails with `Missing ...` for layout/config issues, or `MCP server verify failed...` when Python deps/startup are broken.
 - `recommended` includes all `simple` checks, requires `POSTGRES_DSN`, and runs an active Postgres probe (`SELECT 1`) when `psycopg` is installed. Fails with `Recommended/Power-user require POSTGRES_DSN...` or `FAIL: Postgres probe failed...`.
@@ -307,6 +312,26 @@ Please:
 8. Add the MCP server config for my agent
 9. Verify MCP, gateway, Ollama, and Neo4j connectivity
 10. Tell me exactly what you changed and how to run it daily
+```
+
+Agent-first bootstrap (preferred for reliability):
+```text
+Set up AI Memory Brain power-user mode on this Mac using repo:
+/Users/akushniruk/home_projects/ai-memory-brain
+
+Requirements:
+- Keep JSONL first-write semantics unchanged
+- Use app-home runtime under ~/Library/Application Support/ai-memory-brain
+- Configure Postgres + Neo4j + Ollama/Gemma
+
+Execute:
+1. cd /Users/akushniruk/home_projects/ai-memory-brain
+2. Run: memory_gateway/setup-power-user.sh --neo4j-password "<REAL_NEO4J_PASSWORD>"
+3. Run: memory_gateway/start-server.sh
+4. Verify: curl http://127.0.0.1:8765/health
+5. Print exact pass/fail status for Postgres, Neo4j auth, and Ollama tags endpoint.
+
+Do not skip verification steps. Report any blocker with exact command output.
 ```
 
 ## Install it with an agent
