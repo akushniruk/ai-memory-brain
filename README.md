@@ -125,6 +125,29 @@ Profile mapping:
 - `recommended`: `simple` + Postgres structured/index layer
 - `power-user`: `recommended` + Neo4j graph + Ollama/Gemma librarian
 
+Install + verify profile from CLI:
+```bash
+# simple
+memory_gateway/install-profile.sh --profile simple
+memory_gateway/verify-profile.sh --profile simple
+
+# recommended
+memory_gateway/install-profile.sh \
+  --profile recommended \
+  --postgres-dsn postgresql://localhost/ai_memory_brain
+memory_gateway/verify-profile.sh --profile recommended
+
+# power-user
+memory_gateway/install-profile.sh \
+  --profile power-user \
+  --postgres-dsn postgresql://localhost/ai_memory_brain \
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-user neo4j \
+  --neo4j-password your-password \
+  --helper-model gemma4:e2b
+memory_gateway/verify-profile.sh --profile power-user
+```
+
 Run the MCP server:
 ```bash
 source .venv-memory/bin/activate
@@ -199,6 +222,12 @@ MEMORY_HELPER_ENABLED=1
 MEMORY_HELPER_MODEL=gemma4:e2b
 MEMORY_HELPER_BASE_URL=http://127.0.0.1:11434/api/generate
 MEMORY_HELPER_TIMEOUT_SEC=15
+```
+
+For profile-based setup without manual env edits, use:
+```bash
+memory_gateway/install-profile.sh --profile power-user --postgres-dsn postgresql://localhost/ai_memory_brain --neo4j-password your-password
+memory_gateway/verify-profile.sh --profile power-user
 ```
 
 ### Start the full stack

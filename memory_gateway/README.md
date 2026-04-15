@@ -37,6 +37,42 @@ pip install -r memory_librarian/requirements.txt
 cp memory_gateway/.env.example memory_gateway/.env
 ```
 
+## Install profiles (end-to-end)
+
+Simple (JSONL + vault + MCP):
+```bash
+cd /Users/akushniruk/home_projects/ai-memory-brain
+memory_gateway/install-profile.sh --profile simple
+memory_gateway/verify-profile.sh --profile simple
+```
+
+Recommended (Simple + Postgres structured layer):
+```bash
+cd /Users/akushniruk/home_projects/ai-memory-brain
+memory_gateway/install-profile.sh \
+  --profile recommended \
+  --postgres-dsn postgresql://localhost/ai_memory_brain
+memory_gateway/verify-profile.sh --profile recommended
+```
+
+Power-user (Recommended + Neo4j + Ollama/Gemma):
+```bash
+cd /Users/akushniruk/home_projects/ai-memory-brain
+memory_gateway/install-profile.sh \
+  --profile power-user \
+  --postgres-dsn postgresql://localhost/ai_memory_brain \
+  --neo4j-uri bolt://localhost:7687 \
+  --neo4j-user neo4j \
+  --neo4j-password your-password \
+  --helper-model gemma4:e2b
+memory_gateway/verify-profile.sh --profile power-user
+```
+
+Tradeoffs:
+- `simple`: lowest setup complexity, no Postgres/Neo4j/helper requirements
+- `recommended`: better structured retrieval/state with local Postgres
+- `power-user`: richest recall and extraction, highest local dependency footprint
+
 Important:
 - repo-local `.run` is no longer the default runtime storage location
 - JSONL remains the authoritative first-write path
