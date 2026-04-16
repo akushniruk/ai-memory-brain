@@ -5,32 +5,39 @@ AI Memory Brain is a local memory layer for coding agents. It captures high-sign
 It is not a replacement for a wiki. A wiki is where you publish curated knowledge. AI Memory Brain is where agents recover operational memory: what happened, why decisions were made, what changed, and what was already tried.
 
 ## Why use it
+
 - Recover project context across sessions without re-explaining everything
 - Answer questions like “what did we do yesterday?” or “why did we change this?”
 - Keep memory local: JSONL storage, optional Neo4j graph, optional Ollama helper
 - Work across projects and agents instead of per-repo notes
 
 ## Best fit
+
 Use AI Memory Brain when you want your agent to remember work history and decisions automatically or semi-automatically.
 
 Use a wiki or Obsidian when you want polished, hand-curated documentation for humans.
 
 The two work well together:
+
 - Wiki/Obsidian = published knowledge
 - AI Memory Brain = captured work memory
 
 The graph is important because it turns memory from a flat event log into connected context. Instead of only storing entries by time, the graph links work by project, day, entity, and relationship so agents can recover why something mattered, not just that it happened.
 
 Gemma and the graph are both optional, but both are recommended:
+
 - Graph: makes recall structured instead of flat, so project/day/entity relationships stay connected
 - Gemma librarian: improves extraction, summaries, and semantic links inside the graph
 
 Default model policy:
+
 - local Ollama/Gemma is the default path when helper extraction is enabled
 - paid/high-tier providers are opt-in only and should never be silently selected
 
 ## What it includes
+
 - `memory_librarian/server.py`: MCP stdio server with memory tools
+- `docs/memory-librarian-howto-reference.md`: install/use/schema guide for the MCP server
 - `memory_gateway/`: optional HTTP gateway and CLI helpers for auto-capture
 - Local JSONL memory log
 - Obsidian-compatible vault scaffold stored beside the memory log
@@ -44,6 +51,7 @@ Default model policy:
 - Optional but recommended Gemma librarian model for much better local entity extraction, summarization, and richer graph links
 
 ## Architecture
+
 ```mermaid
 flowchart TD
   U["User"] --> A["Agent: Codex / Cursor / Claude"]
@@ -55,7 +63,10 @@ flowchart TD
   O --> G["Neo4j graph (optional)"]
 ```
 
+
+
 ## How it works
+
 ```mermaid
 sequenceDiagram
   participant U as User
@@ -91,9 +102,12 @@ sequenceDiagram
   end
 ```
 
+
+
 ## Installation
 
 ### Default app home
+
 macOS default:
 
 ```bash
@@ -101,17 +115,20 @@ macOS default:
 ```
 
 Default layout:
+
 - `memory/events.jsonl`
 - `memory/logs/`
 - `vault/`
 - `config/`
 
 Current bridge behavior:
+
 - `daily_checkin` and `daily_checkout` append into `vault/daily-notes/YYYY-MM-DD.md`
 - `meeting_summary` writes a note into `vault/meetings/`
 - review-first knowledge candidates are written into `vault/memory/review/`
 
 ### 1. Clone and set up Python
+
 ```bash
 git clone https://github.com/akushniruk/ai-memory-brain.git
 cd ai-memory-brain
@@ -122,14 +139,17 @@ cp memory_gateway/.env.example memory_gateway/.env
 ```
 
 ### 2. Start with MCP-only mode
+
 This is the simplest setup and the recommended starting point.
 
 Profile mapping:
+
 - `simple`: MCP + JSONL + vault scaffold
 - `recommended`: `simple` + Postgres structured/index layer
 - `power-user`: `recommended` + Neo4j graph + Ollama/Gemma librarian
 
 Install + verify profile from CLI:
+
 ```bash
 # simple
 memory_gateway/install-profile.sh --profile simple
@@ -153,27 +173,32 @@ memory_gateway/verify-profile.sh --profile power-user
 ```
 
 If power-user setup fails due to local Postgres initialization or config drift, use:
+
 ```bash
 memory_gateway/setup-power-user.sh --neo4j-password "<your-neo4j-password>"
 ```
 
 Profile verify expectations and common failures:
+
 - `simple` expects app-home layout (`memory/`, `vault/`, `config/`) and MCP startup check to pass. Fails with `Missing ...` for layout/config issues, or `MCP server verify failed...` when Python deps/startup are broken.
 - `recommended` includes all `simple` checks, requires `POSTGRES_DSN`, and runs an active Postgres probe (`SELECT 1`) when `psycopg` is installed. Fails with `Recommended/Power-user require POSTGRES_DSN...` or `FAIL: Postgres probe failed...`.
 - `power-user` includes all `recommended` checks, requires `NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD`, `MEMORY_HELPER_ENABLED=1`, and `MEMORY_HELPER_MODEL`, then probes Neo4j (TCP, plus auth probe when `neo4j` Python driver is installed) and Ollama (`/api/tags`, 3s timeout). Fails with `Power-user requires ...`, `FAIL: Neo4j ...`, or `FAIL: Ollama probe failed ...`.
 
 Run the MCP server:
+
 ```bash
 source .venv-memory/bin/activate
 python memory_librarian/server.py
 ```
 
 ### 3. Connect your agent
+
 Add an MCP server entry that points to `memory_librarian/server.py`.
 
 Cursor example:
 
 `~/.cursor/mcp.json`
+
 ```json
 {
   "mcpServers": {
@@ -188,13 +213,16 @@ Cursor example:
 For Codex or Claude, add the same MCP server entry in their MCP config.
 
 ## Full setup: recommended stack
+
 This is the full setup I recommend and personally use when I want the best experience:
+
 - MCP server for agent access
 - Neo4j graph for connected memory
 - Ollama running locally
 - Gemma librarian model for extraction and better summaries
 
 Why this setup is better:
+
 - JSONL gives you the raw durable log
 - Postgres gives you structured/index state without sitting on the hot path
 - the graph makes memory navigable by project, day, entity, and relationship
@@ -202,12 +230,14 @@ Why this setup is better:
 - agents get both factual history and connected context
 
 ### Full stack prerequisites
+
 - Python 3
 - Neo4j running locally on `bolt://localhost:7687`
 - Ollama running locally on `http://127.0.0.1:11434`
 - A local Gemma model in Ollama, for example `gemma4:e2b`
 
 ### Full stack install
+
 ```bash
 git clone https://github.com/akushniruk/ai-memory-brain.git
 cd ai-memory-brain
@@ -218,6 +248,7 @@ cp memory_gateway/.env.example memory_gateway/.env
 ```
 
 ### Full stack `.env`
+
 Set `memory_gateway/.env` like this:
 
 ```dotenv
@@ -239,12 +270,14 @@ MEMORY_HELPER_TIMEOUT_SEC=15
 ```
 
 For profile-based setup without manual env edits, use:
+
 ```bash
 memory_gateway/install-profile.sh --profile power-user --postgres-dsn postgresql://localhost/ai_memory_brain --neo4j-password your-password
 memory_gateway/verify-profile.sh --profile power-user
 ```
 
 ### Start the full stack
+
 1. Start Neo4j
 2. Start Ollama
 3. Make sure the Gemma model is available in Ollama
@@ -252,19 +285,23 @@ memory_gateway/verify-profile.sh --profile power-user
 5. Connect your agent to the MCP server
 
 Example:
+
 ```bash
 source .venv-memory/bin/activate
 python memory_librarian/server.py
 ```
 
 Optional gateway for auto-capture:
+
 ```bash
 source .venv-memory/bin/activate
 memory_gateway/start-server.sh
 ```
 
 ### Verify the full stack
+
 Check the MCP server:
+
 ```bash
 source .venv-memory/bin/activate
 printf '%s\n%s\n' \
@@ -274,16 +311,19 @@ printf '%s\n%s\n' \
 ```
 
 Check the memory gateway:
+
 ```bash
 curl http://127.0.0.1:8765/health
 ```
 
 Check Ollama:
+
 ```bash
 curl http://127.0.0.1:11434/api/tags
 ```
 
 Check Neo4j:
+
 ```cypher
 MATCH (g:MemoryGroup)-[:HAS_MEMORY]->(m:Memory)
 RETURN m.created_at, m.source, m.kind, m.text
@@ -292,6 +332,7 @@ LIMIT 20;
 ```
 
 ### Agent prompt for the full stack
+
 If your friend wants an agent to install the full setup, send this:
 
 ```text
@@ -319,9 +360,10 @@ Please:
 ```
 
 Agent-first bootstrap (preferred for reliability):
+
 ```text
 Set up AI Memory Brain power-user mode on this Mac using repo:
-/Users/akushniruk/home_projects/ai-memory-brain
+/path/to/ai-memory-brain
 
 Requirements:
 - Keep JSONL first-write semantics unchanged
@@ -329,7 +371,7 @@ Requirements:
 - Configure Postgres + Neo4j + Ollama/Gemma
 
 Execute:
-1. cd /Users/akushniruk/home_projects/ai-memory-brain
+1. cd /path/to/ai-memory-brain
 2. Run: memory_gateway/setup-power-user.sh --neo4j-password "<REAL_NEO4J_PASSWORD>"
 3. Run: memory_gateway/start-server.sh
 4. Verify: curl http://127.0.0.1:8765/health
@@ -339,6 +381,7 @@ Do not skip verification steps. Report any blocker with exact command output.
 ```
 
 ## Install it with an agent
+
 If your friend wants an agent to do most of the setup, send this prompt:
 
 ```text
@@ -361,9 +404,11 @@ Do not enable gateway mode or CLI wrappers unless I ask.
 If they want auto-capture later, they can ask their agent to enable gateway mode after MCP-only is working.
 
 ## Copy-paste for an agent
+
 Use one of these prompts exactly as-is.
 
 ### Copy-paste: simple install
+
 ```text
 Install AI Memory Brain for me in MCP-only mode.
 
@@ -390,6 +435,7 @@ Important:
 ```
 
 ### Copy-paste: full recommended install
+
 ```text
 Install AI Memory Brain for me with the full recommended setup.
 
@@ -422,6 +468,7 @@ Important:
 ```
 
 ## Recommended usage pattern
+
 ```mermaid
 sequenceDiagram
   participant A as Agent
@@ -431,12 +478,16 @@ sequenceDiagram
   A->>M: memory_store_summary(summary, project)
 ```
 
+
+
 Good default workflow for agents:
+
 - Start: `memory_project_context(project)`
 - During work: `memory_search(...)` or `memory_by_date(...)` as needed
 - End: `memory_store_summary(...)` with goal, changes, decisions, validation, and risks/TODO
 
 ## Core tools
+
 - `memory_add`
 - `memory_store_summary`
 - `memory_search`
@@ -461,7 +512,9 @@ Good default workflow for agents:
 - `memory_review_reject`
 
 ## Verification
+
 Check that the MCP server starts:
+
 ```bash
 source .venv-memory/bin/activate
 printf '%s\n%s\n' \
@@ -471,21 +524,25 @@ printf '%s\n%s\n' \
 ```
 
 Check local storage:
+
 ```bash
 ls -la ~/Library/Application\ Support/ai-memory-brain/memory
 ls -la ~/Library/Application\ Support/ai-memory-brain/vault
 ```
 
 ## Optional: gateway mode
+
 Use gateway mode only if you want automatic CLI capture and local helper scripts.
 
 Start the gateway:
+
 ```bash
 source .venv-memory/bin/activate
 memory_gateway/start-server.sh
 ```
 
 Defaults:
+
 - Memory gateway: `127.0.0.1:8765`
 - Ollama helper: `127.0.0.1:11434`
 
@@ -494,18 +551,22 @@ Gemma is the optional local librarian model and is not required for the core set
 The graph is also optional. You can run AI Memory Brain with JSONL-only storage if you want the simplest possible setup.
 
 Without Gemma:
+
 - you still get local memory storage, MCP tools, project/date recall, and manually written summaries
 
 With Gemma:
+
 - entity extraction gets much better
 - graph links become more useful
 - semantic recall and auto-generated summaries improve a lot
 
 Without the graph:
+
 - memory still works as a local log and searchable timeline
 - recall is less connected across projects, days, and entities
 
 With the graph:
+
 - memory becomes much easier to explore by project, day, and relationship
 - agents can recover context instead of just matching keywords
 - project history becomes more useful over time
@@ -513,17 +574,20 @@ With the graph:
 For the easiest install, start without Gemma and without the graph. For the best experience, both are recommended.
 
 Optional installers:
+
 - `memory_gateway/install-cli-wrappers.sh`
 - `memory_gateway/install-launch-agent.sh`
 - `memory_gateway/install-cursor-global.sh`
 
 Manual vault hygiene (no scheduler):
+
 ```bash
 source .venv-memory/bin/activate
 python memory_gateway/vault_lint.py
 ```
 
 ## Daily check-in / checkout
+
 These write memory entries without opening the MCP UI.
 
 ```bash
@@ -547,9 +611,11 @@ python memory_gateway/meeting_summary.py \
 ```
 
 Meeting summaries from MCP:
+
 - call `memory_meeting_summary` with `text` (+ optional `project`, `source`, `importance`, `tags`, `graph`)
 
 ## Graph shape
+
 ```mermaid
 flowchart TD
   G["MemoryGroup: personal-brain"] --> P["Project"]
@@ -562,5 +628,8 @@ flowchart TD
   E --> R["Related Entity"]
 ```
 
+
+
 ## License
+
 MIT

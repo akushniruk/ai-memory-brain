@@ -267,6 +267,36 @@ class McpServerTests(unittest.TestCase):
             self.assertTrue(bad_tags["result"].get("isError", False))
             self.assertIn("tags must be an array of strings", bad_tags["result"]["content"][0]["text"])
 
+            bad_add_importance = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 56,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_add",
+                        "arguments": {"text": "bad add importance", "importance": "critical"},
+                    },
+                },
+            )
+            self.assertTrue(bad_add_importance["result"].get("isError", False))
+            self.assertIn("importance must be one of", bad_add_importance["result"]["content"][0]["text"])
+
+            bad_summary_tags = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 57,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_store_summary",
+                        "arguments": {"summary": "bad summary tags", "tags": [1, "ok"]},
+                    },
+                },
+            )
+            self.assertTrue(bad_summary_tags["result"].get("isError", False))
+            self.assertIn("tags must be an array of strings", bad_summary_tags["result"]["content"][0]["text"])
+
             long_text = "x" * 800
             _rpc(
                 proc,

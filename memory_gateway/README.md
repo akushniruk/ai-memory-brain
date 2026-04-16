@@ -34,7 +34,7 @@ Layout:
 
 ## Setup
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 python3 -m venv .venv-memory
 source .venv-memory/bin/activate
 pip install -r memory_librarian/requirements.txt
@@ -45,14 +45,14 @@ cp memory_gateway/.env.example memory_gateway/.env
 
 Simple (JSONL + vault + MCP):
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 memory_gateway/install-profile.sh --profile simple
 memory_gateway/verify-profile.sh --profile simple
 ```
 
 Recommended (Simple + Postgres structured layer):
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 memory_gateway/install-profile.sh \
   --profile recommended \
   --postgres-dsn postgresql://localhost/ai_memory_brain
@@ -61,7 +61,7 @@ memory_gateway/verify-profile.sh --profile recommended
 
 Power-user (Recommended + Neo4j + Ollama/Gemma):
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 memory_gateway/install-profile.sh \
   --profile power-user \
   --postgres-dsn postgresql://localhost/ai_memory_brain \
@@ -74,14 +74,14 @@ memory_gateway/verify-profile.sh --profile power-user
 
 One-command guided bootstrap for power-user (handles common setup issues):
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 memory_gateway/setup-power-user.sh --neo4j-password "<your-neo4j-password>"
 ```
 
 Agent prompt users can paste:
 ```text
 Set up AI Memory Brain power-user mode in this repo:
-/Users/akushniruk/home_projects/ai-memory-brain
+/path/to/ai-memory-brain
 
 Run:
 1) memory_gateway/setup-power-user.sh --neo4j-password "<REAL_NEO4J_PASSWORD>"
@@ -117,26 +117,26 @@ Important:
 
 ## Start gateway
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 source .venv-memory/bin/activate
 memory_gateway/start-server.sh
 ```
 
 ## Auto-start on login (macOS)
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 memory_gateway/install-launch-agent.sh
 ```
 
 ## Global wrappers (Codex, Claude, Ollama)
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 memory_gateway/install-cli-wrappers.sh
 ```
 
 ## Global Cursor integration (all projects)
 ```bash
-cd /Users/akushniruk/home_projects/ai-memory-brain
+cd /path/to/ai-memory-brain
 memory_gateway/install-cursor-global.sh
 ```
 

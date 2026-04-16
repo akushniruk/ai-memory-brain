@@ -17,8 +17,17 @@ from downstream_sinks import (
     reject_review_item,
     sync_event_to_vault,
 )
-from neo4j import GraphDatabase
-from neo4j.exceptions import AuthError, ServiceUnavailable
+try:
+    from neo4j import GraphDatabase
+    from neo4j.exceptions import AuthError, ServiceUnavailable
+except ImportError:  # pragma: no cover - optional dependency
+    GraphDatabase = None
+
+    class AuthError(Exception):
+        """Fallback auth error when neo4j dependency is missing."""
+
+    class ServiceUnavailable(Exception):
+        """Fallback service error when neo4j dependency is missing."""
 
 from runtime_layout import load_runtime_settings
 from postgres_reads import (
@@ -358,6 +367,10 @@ def store_graph_memory(
     group_id: str,
     knowledge: dict[str, Any] | None = None,
 ) -> None:
+    if GraphDatabase is None:
+        raise RuntimeError(
+            "Neo4j driver is unavailable. Install optional dependency with: pip install neo4j"
+        )
     extracted = knowledge or {"entities": [], "relations": [], "summary": ""}
     project = _safe_name(event.get("project")) or "unscoped"
     project_key = _project_key(project)
@@ -588,6 +601,8 @@ def _decode_graph_record(record: Any) -> dict[str, Any]:
 
 def get_graph_recent(limit: int = 20, *, project: str = "", source: str = "", kind: str = "") -> list[dict[str, Any]]:
     settings = load_settings()
+    if GraphDatabase is None:
+        return []
     if not settings["neo4j_uri"] or not settings["neo4j_user"] or not settings["neo4j_password"]:
         return []
     query = """
@@ -627,6 +642,8 @@ def get_graph_recent(limit: int = 20, *, project: str = "", source: str = "", ki
 
 def search_graph(query_text: str, limit: int = 10, *, project: str = "", source: str = "", kind: str = "") -> list[dict[str, Any]]:
     settings = load_settings()
+    if GraphDatabase is None:
+        return []
     if not settings["neo4j_uri"] or not settings["neo4j_user"] or not settings["neo4j_password"]:
         return []
     query = """
@@ -668,6 +685,8 @@ def search_graph(query_text: str, limit: int = 10, *, project: str = "", source:
 
 def get_entity_context(query_text: str, limit: int = 8) -> list[dict[str, Any]]:
     settings = load_settings()
+    if GraphDatabase is None:
+        return []
     if not settings["neo4j_uri"] or not settings["neo4j_user"] or not settings["neo4j_password"]:
         return []
 
@@ -710,6 +729,8 @@ def get_entity_context(query_text: str, limit: int = 8) -> list[dict[str, Any]]:
 
 def get_graph_overview(limit: int = 8) -> dict[str, Any]:
     settings = load_settings()
+    if GraphDatabase is None:
+        return {}
     if not settings["neo4j_uri"] or not settings["neo4j_user"] or not settings["neo4j_password"]:
         return {}
 
@@ -780,6 +801,8 @@ def get_graph_overview(limit: int = 8) -> dict[str, Any]:
 
 def get_graph_project_day(project: str, date: str, limit: int = 12) -> dict[str, Any]:
     settings = load_settings()
+    if GraphDatabase is None:
+        return {}
     if not settings["neo4j_uri"] or not settings["neo4j_user"] or not settings["neo4j_password"]:
         return {}
 
@@ -893,11 +916,18 @@ def get_brain_health(limit: int = 8) -> dict[str, Any]:
         "missing_project_days": missing_project_days,
         "helper_enabled": bool(settings.get("helper_enabled")),
         "helper_model": settings.get("helper_model", ""),
-        "neo4j_enabled": bool(settings.get("neo4j_uri") and settings.get("neo4j_user") and settings.get("neo4j_password")),
+        "neo4j_enabled": bool(
+            GraphDatabase is not None
+            and settings.get("neo4j_uri")
+            and settings.get("neo4j_user")
+            and settings.get("neo4j_password")
+        ),
     }
 
 
 def _graph_project_day_keys(settings: dict[str, Any]) -> set[tuple[str, str]]:
+    if GraphDatabase is None:
+        return set()
     if not settings["neo4j_uri"] or not settings["neo4j_user"] or not settings["neo4j_password"]:
         return set()
     query = """
