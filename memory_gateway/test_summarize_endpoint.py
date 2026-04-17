@@ -3,11 +3,20 @@ import sys
 import tempfile
 import threading
 import unittest
+import warnings
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib import request as urllib_request
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Suppress known neo4j asyncio deprecation noise in summarize endpoint tests.
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=r".*iscoroutinefunction.*",
+    module=r"neo4j\..*",
+)
 
 
 def _get_free_port() -> int:
@@ -58,6 +67,8 @@ class SummarizeEndpointTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
         self.tmp.cleanup()
 
     def _post(self, path: str, payload: dict) -> dict:
@@ -121,6 +132,8 @@ class SummarizeEndpointTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as ctx:
             urllib_request.urlopen(req, timeout=5)
         self.assertEqual(ctx.exception.code, 404)
+        # Explicitly close HTTPError response object to avoid ResourceWarning noise.
+        ctx.exception.close()
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ Default model policy:
 
 - `memory_librarian/server.py`: MCP stdio server with memory tools
 - `docs/memory-librarian-howto-reference.md`: install/use/schema guide for the MCP server
+- `docs/memory-operator-playbook.md`: practical quality triage, dedupe/retrieval tuning, and repair flows
 - `memory_gateway/`: optional HTTP gateway and CLI helpers for auto-capture
 - Local JSONL memory log
 - Obsidian-compatible vault scaffold stored beside the memory log
@@ -501,6 +502,9 @@ Good default workflow for agents:
 - `memory_graph_project_day`
 - `memory_today_graph`
 - `memory_brain_health`
+- `memory_brain_doctor`
+- `memory_compact_day`
+- `memory_entity_hygiene`
 - `memory_repair_graph`
 - `memory_vault_status`
 - `memory_postgres_status`
@@ -584,6 +588,36 @@ Manual vault hygiene (no scheduler):
 ```bash
 source .venv-memory/bin/activate
 python memory_gateway/vault_lint.py
+```
+
+Manual brain health/watchdog check:
+
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/brain_doctor.py
+```
+
+Write dedupe behavior:
+- New events are deduplicated against near-identical recent events (same kind/project/source, 30-minute window).
+- Matching uses semantic text similarity, not only exact string equality.
+- JSONL remains canonical first-write durability; deduplicated events intentionally skip duplicate writes.
+- Tuning via env:
+  - `MEMORY_DEDUPE_WINDOW_MINUTES` (default `30`)
+  - `MEMORY_DEDUPE_SIMILARITY_THRESHOLD` (default `0.86`, range clamped `0.5..0.99`)
+- Persist responses include `dedupe_explain` with similarity, threshold, and match dimensions for tuning.
+- High-signal kinds (`task_summary`, `decision`, `milestone`, `meeting_summary`) use a weighted dedupe window (2x base window).
+- Set `metadata.force_store=true` on an event to bypass dedupe for explicit keep-both cases.
+- Search recall supports token-aware matching in addition to exact substring matching.
+- Query matching ignores common low-signal stopwords and supports strong partial token hits for better recall.
+- Token matching prefers whole-token/prefix semantics to reduce noisy mid-word hits.
+- Very short single-token queries (`<=2` chars) require exact token match for precision.
+- Search/recent/context payloads include `retrieval` metadata (`confidence`, `score`, `score_breakdown`, `match_type`) for agent-side explainability.
+
+Manual daily compaction capsule:
+
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/compact_day.py --date 2026-04-17
 ```
 
 ## Daily check-in / checkout

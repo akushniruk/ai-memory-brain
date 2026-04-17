@@ -28,6 +28,9 @@ from gateway import (
     search_events,
     search_graph,
     summarize_events_with_helper,
+    run_doctor,
+    build_day_capsule,
+    run_entity_hygiene,
 )
 
 
@@ -84,6 +87,26 @@ def tool_result(data: dict[str, Any], *, is_error: bool = False) -> dict[str, An
     }
 
 
+def maintenance_contract(
+    payload: dict[str, Any],
+    *,
+    tool_name: str,
+    fmt: str,
+) -> dict[str, Any]:
+    out = dict(payload)
+    out.setdefault("ok", True)
+    out.setdefault("error", "")
+    out.setdefault(
+        "explainability",
+        {
+            "tool": tool_name,
+            "format": fmt,
+            "contract_version": "v1",
+        },
+    )
+    return out
+
+
 def merge_metadata(arguments: dict[str, Any]) -> dict[str, Any]:
     metadata = dict(arguments.get("metadata") or {})
     branch = arguments.get("branch") or ""
@@ -134,6 +157,18 @@ def build_event_payload(
     return payload
 
 
+def _has_summary_sections(summary: str) -> bool:
+    required_markers = (
+        "goal:",
+        "changes",
+        "decision",
+        "validation",
+        "risk",
+    )
+    normalized = str(summary).strip().lower()
+    return all(marker in normalized for marker in required_markers)
+
+
 def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     fmt = str(arguments.get("format", "full"))
     max_text = int(arguments.get("max_text_chars", 400))
@@ -148,6 +183,10 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return tool_result(result)
 
     if name == "memory_store_summary":
+        if not _has_summary_sections(arguments["summary"]):
+            raise ValueError(
+                "summary must include: Goal, Changes, Decisions, Validation, and Risks/TODO."
+            )
         payload = build_event_payload(
             arguments,
             text=arguments["summary"],
@@ -179,11 +218,11 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return tool_result(maybe_compact_payload(payload, fmt, max_text))
 
     if name == "memory_vault_status":
-        payload = get_vault_status()
+        payload = maintenance_contract(get_vault_status(), tool_name=name, fmt=fmt)
         return tool_result(maybe_compact_payload(payload, fmt, max_text))
 
     if name == "memory_postgres_status":
-        payload = get_postgres_status()
+        payload = maintenance_contract(get_postgres_status(), tool_name=name, fmt=fmt)
         return tool_result(maybe_compact_payload(payload, fmt, max_text))
 
     if name == "memory_postgres_recent":
@@ -259,8 +298,22 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
     if name == "memory_brain_health":
         limit = int(arguments.get("limit", 8))
-        payload = get_brain_health(limit=limit)
+        payload = maintenance_contract(get_brain_health(limit=limit), tool_name=name, fmt=fmt)
         return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_brain_doctor":
+        payload = maintenance_contract(run_doctor(), tool_name=name, fmt=fmt)
+        return tool_result(maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
+
+    if name == "memory_compact_day":
+        date = arguments["date"]
+        project = str(arguments.get("project", ""))
+        payload = maintenance_contract(build_day_capsule(date=date, project=project), tool_name=name, fmt=fmt)
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_entity_hygiene":
+        payload = maintenance_contract(run_entity_hygiene(), tool_name=name, fmt=fmt)
+        return tool_result(maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
 
     if name == "memory_today_summary":
         project = arguments.get("project", "")

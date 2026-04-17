@@ -2,6 +2,8 @@
 
 Global local memory gateway for Codex, Claude, Cursor and Ollama CLI.
 
+Operator runbook: `../docs/memory-operator-playbook.md`
+
 ## What it stores
 - Every event into a JSONL ledger
 - Optional vault scaffold beside the ledger
@@ -163,6 +165,36 @@ Run manual vault lint (no cron):
 ```bash
 source .venv-memory/bin/activate
 python memory_gateway/vault_lint.py
+```
+
+Run brain doctor (startup + storage + retrieval health):
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/brain_doctor.py
+```
+
+Brain doctor output includes:
+- `checks`: runtime availability checks (gateway, launchctl, postgres, ollama, vault bridge)
+- `drift_checks`: profile/config drift checks with per-check remediation guidance
+- `dedupe`: active dedupe policy parameters
+
+Dedupe tuning knobs:
+- `MEMORY_DEDUPE_WINDOW_MINUTES` (default `30`)
+- `MEMORY_DEDUPE_SIMILARITY_THRESHOLD` (default `0.86`)
+
+For explicit non-deduped writes, set event metadata:
+- `metadata.force_store=true`
+
+Build a daily compact capsule for faster recall:
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/compact_day.py --date 2026-04-17
+```
+
+Run manual entity hygiene and graph backfill checks:
+```bash
+source .venv-memory/bin/activate
+python memory_gateway/entity_hygiene.py
 ```
 
 Neo4j verify:

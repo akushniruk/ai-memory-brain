@@ -83,6 +83,9 @@ class McpServerTests(unittest.TestCase):
                     "memory_graph_project_day",
                     "memory_today_graph",
                     "memory_brain_health",
+                    "memory_brain_doctor",
+                    "memory_compact_day",
+                    "memory_entity_hygiene",
                     "memory_today_summary",
                     "memory_repair_graph",
                     "memory_vault_status",
@@ -178,11 +181,35 @@ class McpServerTests(unittest.TestCase):
                     "method": "tools/call",
                     "params": {
                         "name": "memory_store_summary",
-                        "arguments": {"summary": "shipped librarian", "project": "pharos"},
+                        "arguments": {
+                            "summary": (
+                                "Goal: ship librarian.\n"
+                                "Changes: wired MCP storage and retrieval polish.\n"
+                                "Decisions: kept JSONL as canonical first-write path.\n"
+                                "Validation: unit tests and MCP roundtrip checks passed.\n"
+                                "Risks/TODO: monitor recall quality over the next sessions."
+                            ),
+                            "project": "pharos",
+                        },
                     },
                 },
             )
             self.assertFalse(summary["result"].get("isError", False))
+
+            bad_summary_shape = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 501,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_store_summary",
+                        "arguments": {"summary": "quick note only"},
+                    },
+                },
+            )
+            self.assertTrue(bad_summary_shape["result"].get("isError", False))
+            self.assertIn("Goal, Changes, Decisions, Validation, and Risks/TODO", bad_summary_shape["result"]["content"][0]["text"])
 
             meeting_summary = _rpc(
                 proc,
@@ -290,7 +317,16 @@ class McpServerTests(unittest.TestCase):
                     "method": "tools/call",
                     "params": {
                         "name": "memory_store_summary",
-                        "arguments": {"summary": "bad summary tags", "tags": [1, "ok"]},
+                        "arguments": {
+                            "summary": (
+                                "Goal: test bad tags.\n"
+                                "Changes: send invalid tags payload.\n"
+                                "Decisions: validation should reject non-string entries.\n"
+                                "Validation: expect schema error.\n"
+                                "Risks/TODO: none."
+                            ),
+                            "tags": [1, "ok"],
+                        },
                     },
                 },
             )
@@ -326,6 +362,8 @@ class McpServerTests(unittest.TestCase):
             hit = next(item for item in compact_payload["raw_results"] if item["text"].startswith("x"))
             self.assertTrue(hit["text"].endswith("\u2026"))
             self.assertLessEqual(len(hit["text"]), 121)
+            self.assertIn("retrieval", hit)
+            self.assertIn("confidence", hit["retrieval"])
 
             milestone = _rpc(
                 proc,
@@ -358,21 +396,26 @@ class McpServerTests(unittest.TestCase):
             )
             queue_payload = json.loads(queue["result"]["content"][0]["text"])
             self.assertGreaterEqual(queue_payload["count"], 1)
-            queue_key = queue_payload["items"][0]["queue_key"]
-
-            approve = _rpc(
-                proc,
-                {
-                    "jsonrpc": "2.0",
-                    "id": 10,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "memory_review_approve",
-                        "arguments": {"queue_key": queue_key, "target": "projects"},
+            approve_payload = {"ok": False}
+            for idx, item in enumerate(queue_payload["items"]):
+                queue_key = item.get("queue_key", "")
+                if not isinstance(queue_key, str) or not queue_key.startswith("review:"):
+                    continue
+                approve = _rpc(
+                    proc,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 10 + idx,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "memory_review_approve",
+                            "arguments": {"queue_key": queue_key, "target": "projects"},
+                        },
                     },
-                },
-            )
-            approve_payload = json.loads(approve["result"]["content"][0]["text"])
+                )
+                approve_payload = json.loads(approve["result"]["content"][0]["text"])
+                if approve_payload.get("ok"):
+                    break
             self.assertTrue(approve_payload["ok"])
             self.assertEqual(approve_payload["status"], "approved")
 
@@ -388,6 +431,122 @@ class McpServerTests(unittest.TestCase):
             vault_payload = json.loads(vault_status["result"]["content"][0]["text"])
             self.assertTrue(vault_payload["ok"])
             self.assertGreaterEqual(vault_payload["queue"]["approved"], 1)
+
+            recent = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 111,
+                    "method": "tools/call",
+                    "params": {"name": "memory_recent", "arguments": {"project": "pharos", "limit": 10}},
+                },
+            )
+            recent_payload = json.loads(recent["result"]["content"][0]["text"])
+            self.assertIn("raw_results", recent_payload)
+            self.assertTrue(recent_payload["raw_results"])
+            first_recent = recent_payload["raw_results"][0]
+            self.assertIn("retrieval", first_recent)
+            self.assertIn("confidence", first_recent["retrieval"])
+            self.assertIn("score_breakdown", first_recent["retrieval"])
+
+            project_context = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 112,
+                    "method": "tools/call",
+                    "params": {"name": "memory_project_context", "arguments": {"project": "pharos", "limit": 10}},
+                },
+            )
+            project_payload = json.loads(project_context["result"]["content"][0]["text"])
+            self.assertIn("context", project_payload)
+            self.assertIn("recent", project_payload["context"])
+            self.assertTrue(project_payload["context"]["recent"])
+            first_context = project_payload["context"]["recent"][0]
+            self.assertIn("retrieval", first_context)
+            self.assertIn("match_type", first_context["retrieval"])
+            self.assertIn("score_breakdown", first_context["retrieval"])
+
+            doctor = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 12,
+                    "method": "tools/call",
+                    "params": {"name": "memory_brain_doctor", "arguments": {"format": "compact"}},
+                },
+            )
+            self.assertFalse(doctor["result"].get("isError", False))
+            doctor_payload = json.loads(doctor["result"]["content"][0]["text"])
+            self.assertIn("checks", doctor_payload)
+            self.assertIn("explainability", doctor_payload)
+            self.assertEqual(doctor_payload["explainability"]["tool"], "memory_brain_doctor")
+
+            compact_day = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 13,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_compact_day",
+                        "arguments": {"date": "2026-04-05", "project": "pharos"},
+                    },
+                },
+            )
+            self.assertFalse(compact_day["result"].get("isError", False))
+            compact_payload = json.loads(compact_day["result"]["content"][0]["text"])
+            self.assertEqual(compact_payload["date"], "2026-04-05")
+            self.assertEqual(compact_payload["project"], "pharos")
+            self.assertIn("explainability", compact_payload)
+
+            hygiene = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 14,
+                    "method": "tools/call",
+                    "params": {"name": "memory_entity_hygiene", "arguments": {"format": "compact"}},
+                },
+            )
+            self.assertFalse(hygiene["result"].get("isError", False))
+            hygiene_payload = json.loads(hygiene["result"]["content"][0]["text"])
+            self.assertIn("duplicate_cluster_count", hygiene_payload)
+            self.assertIn("explainability", hygiene_payload)
+
+            # Maintenance tool contract parity: compact and full both expose core contract keys.
+            for tool_name, args in (
+                ("memory_vault_status", {}),
+                ("memory_postgres_status", {}),
+                ("memory_brain_health", {"limit": 5}),
+                ("memory_brain_doctor", {}),
+                ("memory_entity_hygiene", {}),
+            ):
+                full_resp = _rpc(
+                    proc,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2000,
+                        "method": "tools/call",
+                        "params": {"name": tool_name, "arguments": {"format": "full", **args}},
+                    },
+                )
+                compact_resp = _rpc(
+                    proc,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2001,
+                        "method": "tools/call",
+                        "params": {"name": tool_name, "arguments": {"format": "compact", **args}},
+                    },
+                )
+                full_payload = json.loads(full_resp["result"]["content"][0]["text"])
+                compact_payload = json.loads(compact_resp["result"]["content"][0]["text"])
+                for payload in (full_payload, compact_payload):
+                    self.assertIn("ok", payload)
+                    self.assertIn("error", payload)
+                    self.assertIn("explainability", payload)
+                    self.assertEqual(payload["explainability"]["tool"], tool_name)
         finally:
             if proc.stdin:
                 proc.stdin.close()

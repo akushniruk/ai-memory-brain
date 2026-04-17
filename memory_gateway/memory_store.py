@@ -1,9 +1,10 @@
 import json
 from collections import Counter
+from difflib import SequenceMatcher
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
@@ -61,6 +62,34 @@ EXTRACT_KINDS = {
     "milestone",
 }
 
+LOW_SIGNAL_QUERY_TOKENS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "to",
+    "with",
+}
+
+
+def _clamp_confidence(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -78,6 +107,89 @@ def normalize_event(event: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("importance", "normal")
     normalized.setdefault("timestamp", utc_now_iso())
     return normalized
+
+
+def _parse_iso8601(value: str) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _normalized_text_key(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _token_set(value: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9_]+", _normalized_text_key(value)))
+
+
+def _text_similarity(left: str, right: str) -> float:
+    left_norm = _normalized_text_key(left)
+    right_norm = _normalized_text_key(right)
+    if not left_norm or not right_norm:
+        return 0.0
+    if left_norm == right_norm:
+        return 1.0
+    ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
+    left_tokens = _token_set(left_norm)
+    right_tokens = _token_set(right_norm)
+    if not left_tokens or not right_tokens:
+        return ratio
+    overlap = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+    # Favor overlap for summary-like content where line edits are common.
+    return max(ratio, overlap)
+
+
+def _find_recent_duplicate_event(
+    events: list[dict[str, Any]],
+    event: dict[str, Any],
+    *,
+    window_minutes: int = 30,
+    similarity_threshold: float = 0.9,
+) -> tuple[dict[str, Any] | None, float]:
+    target_text = str(event.get("text", ""))
+    if not _normalized_text_key(target_text):
+        return None, 0.0
+    target_kind = str(event.get("kind", "")).strip().lower()
+    target_project = str(event.get("project", "")).strip().lower()
+    target_source = str(event.get("source", "")).strip().lower()
+    target_time = _parse_iso8601(str(event.get("timestamp", "")))
+    if target_time is None:
+        return None, 0.0
+    lower_bound = target_time - timedelta(minutes=max(1, window_minutes))
+
+    best_similarity = 0.0
+    for existing in reversed(events):
+        existing_time = _parse_iso8601(str(existing.get("timestamp", "")))
+        if existing_time is None or existing_time < lower_bound:
+            continue
+        similarity = _text_similarity(str(existing.get("text", "")), target_text)
+        if similarity > best_similarity:
+            best_similarity = similarity
+        if similarity < similarity_threshold:
+            continue
+        if str(existing.get("kind", "")).strip().lower() != target_kind:
+            continue
+        if str(existing.get("project", "")).strip().lower() != target_project:
+            continue
+        if str(existing.get("source", "")).strip().lower() != target_source:
+            continue
+        return existing, similarity
+    return None, best_similarity
+
+
+def _effective_dedupe_window_minutes(base_minutes: int, kind: str) -> int:
+    normalized_kind = str(kind or "").strip().lower()
+    high_signal_kinds = {"task_summary", "decision", "milestone", "meeting_summary"}
+    if normalized_kind in high_signal_kinds:
+        return max(1, int(base_minutes * 2))
+    return max(1, base_minutes)
 
 
 def should_store_in_graph(event: dict[str, Any]) -> bool:
@@ -521,7 +633,24 @@ def get_recent_events(limit: int = 20, *, project: str = "", source: str = "", k
     settings = load_settings()
     events = read_jsonl_events(settings["memory_log_path"])
     filtered = [event for event in events if _matches_filter(event, project=project, source=source, kind=kind)]
-    return list(reversed(filtered[-limit:]))
+    ordered = list(reversed(filtered[-limit:]))
+    annotated: list[dict[str, Any]] = []
+    for idx, event in enumerate(ordered):
+        item = dict(event)
+        confidence = _clamp_confidence(0.72 - (idx * 0.03))
+        if event.get("importance") == "high":
+            confidence = _clamp_confidence(confidence + 0.18)
+        item["retrieval"] = {
+            "confidence": round(confidence, 3),
+            "score": round(confidence * 10.0, 3),
+            "score_breakdown": {
+                "importance_boost": 1.8 if event.get("importance") == "high" else 0.0,
+                "position_decay": round(idx * 0.3, 3),
+            },
+            "match_type": "recent_context",
+        }
+        annotated.append(item)
+    return annotated
 
 
 def get_events_by_date(date_str: str, *, project: str = "", source: str = "", kind: str = "") -> list[dict[str, Any]]:
@@ -541,7 +670,11 @@ def search_events(query: str, limit: int = 10, *, project: str = "", source: str
     settings = load_settings()
     events = read_jsonl_events(settings["memory_log_path"])
     query_lower = query.lower().strip()
-    scored: list[tuple[int, dict[str, Any]]] = []
+    raw_query_tokens = [token for token in re.findall(r"[a-z0-9_]+", query_lower) if token]
+    signal_tokens = [token for token in raw_query_tokens if token not in LOW_SIGNAL_QUERY_TOKENS]
+    query_tokens = signal_tokens or raw_query_tokens
+    now_utc = datetime.now(timezone.utc)
+    scored: list[tuple[float, dict[str, Any]]] = []
 
     for event in events:
         if not _matches_filter(event, project=project, source=source, kind=kind):
@@ -555,20 +688,102 @@ def search_events(query: str, limit: int = 10, *, project: str = "", source: str
             " ".join(event.get("tags", [])),
         ]
         combined = " ".join(haystacks).lower()
-        if query_lower not in combined:
+        event_tokens = re.findall(r"[a-z0-9_]+", combined)
+        has_exact_substring = (" " in query_lower) and bool(query_lower) and query_lower in combined
+        token_hits = 0
+        for token in query_tokens:
+            if len(token) <= 2:
+                matched = any(event_token == token for event_token in event_tokens)
+            else:
+                matched = any(event_token == token or event_token.startswith(token) for event_token in event_tokens)
+            if matched:
+                token_hits += 1
+        token_hit_ratio = (token_hits / len(query_tokens)) if query_tokens else 0.0
+        has_token_match = bool(query_tokens) and (
+            token_hits == len(query_tokens) or (len(query_tokens) >= 3 and token_hit_ratio >= 0.7)
+        )
+        if not has_exact_substring and not has_token_match:
             continue
 
-        score = combined.count(query_lower)
+        score = 0.0
+        score_breakdown: dict[str, float] = {
+            "exact_phrase": 0.0,
+            "token_match": 0.0,
+            "token_ratio": 0.0,
+            "importance_boost": 0.0,
+            "project_boost": 0.0,
+            "recency_boost": 0.0,
+        }
+        match_type = "token_partial"
+        if has_exact_substring:
+            exact_hits = float(combined.count(query_lower))
+            score += exact_hits
+            score += 1.0
+            score_breakdown["exact_phrase"] = exact_hits + 1.0
+            match_type = "exact_phrase"
+        if has_token_match:
+            token_count_hits = 0
+            for token in query_tokens:
+                for event_token in event_tokens:
+                    if len(token) <= 2:
+                        if event_token == token:
+                            token_count_hits += 1
+                    elif event_token == token or event_token.startswith(token):
+                        token_count_hits += 1
+            score += float(token_count_hits)
+            score += token_hit_ratio
+            score_breakdown["token_match"] = float(token_count_hits)
+            score_breakdown["token_ratio"] = token_hit_ratio
+            if match_type != "exact_phrase" and token_hit_ratio >= 1.0:
+                match_type = "token_full"
         if event.get("importance") == "high":
-            score += 2
-        scored.append((score, event))
+            score += 2.0
+            score_breakdown["importance_boost"] = 2.0
+        event_project = str(event.get("project", "")).strip()
+        if project and event_project == project:
+            score += 3.0
+            score_breakdown["project_boost"] = 3.0
+        # Prefer fresher context without making old memories disappear.
+        event_time = _parse_iso8601(str(event.get("timestamp", "")))
+        if event_time is not None:
+            age_days = max(0.0, (now_utc - event_time.astimezone(timezone.utc)).total_seconds() / 86400.0)
+            recency_boost = max(0.0, 3.0 - min(3.0, age_days / 3.0))
+            score += recency_boost
+            score_breakdown["recency_boost"] = recency_boost
+
+        # Convert scoring signal into a stable confidence metric for agents.
+        confidence = _clamp_confidence(score / 10.0)
+        annotated = dict(event)
+        annotated["retrieval"] = {
+            "confidence": round(confidence, 3),
+            "score": round(score, 3),
+            "score_breakdown": {key: round(val, 3) for key, val in score_breakdown.items()},
+            "match_type": match_type,
+        }
+        scored.append((score, annotated))
 
     scored.sort(key=lambda item: (item[0], item[1].get("timestamp", "")), reverse=True)
     return [event for _, event in scored[:limit]]
 
 
 def get_project_context(project: str, limit: int = 12) -> dict[str, list[dict[str, Any]]]:
-    recent = get_recent_events(limit=limit, project=project)
+    recent_raw = get_recent_events(limit=limit, project=project)
+    recent: list[dict[str, Any]] = []
+    for idx, event in enumerate(recent_raw):
+        annotated = dict(event)
+        confidence = _clamp_confidence(0.75 - (idx * 0.04))
+        if event.get("importance") == "high":
+            confidence = _clamp_confidence(confidence + 0.15)
+        annotated["retrieval"] = {
+            "confidence": round(confidence, 3),
+            "score": round(confidence * 10.0, 3),
+            "score_breakdown": {
+                "importance_boost": 1.5 if event.get("importance") == "high" else 0.0,
+                "position_decay": round(idx * 0.4, 3),
+            },
+            "match_type": "recent_context",
+        }
+        recent.append(annotated)
     important = [event for event in recent if event.get("importance") == "high"][:limit]
     return {
         "important": important,
@@ -1094,6 +1309,49 @@ def get_postgres_bridge_writes(*, event_id: str = "", limit: int = 50) -> dict[s
 def persist_event(event: dict[str, Any]) -> dict[str, Any]:
     settings = load_settings()
     normalized = normalize_event(event)
+    force_store = bool((normalized.get("metadata") or {}).get("force_store"))
+    if force_store:
+        dedupe_window = int(settings.get("dedupe_window_minutes", 30))
+        dedupe_threshold = float(settings.get("dedupe_similarity_threshold", 0.86))
+    else:
+        dedupe_window = _effective_dedupe_window_minutes(
+            int(settings.get("dedupe_window_minutes", 30)),
+            str(normalized.get("kind", "")),
+        )
+        dedupe_threshold = float(settings.get("dedupe_similarity_threshold", 0.86))
+    existing_events = read_jsonl_events(settings["memory_log_path"])
+    duplicate_of: dict[str, Any] | None = None
+    duplicate_similarity = 0.0
+    if not force_store:
+        duplicate_of, duplicate_similarity = _find_recent_duplicate_event(
+            existing_events,
+            normalized,
+            window_minutes=dedupe_window,
+            similarity_threshold=dedupe_threshold,
+        )
+    if duplicate_of is not None:
+        return {
+            "ok": True,
+            "deduplicated": True,
+            "duplicate_event_id": str(duplicate_of.get("id", "")),
+            "stored_in_graph": False,
+            "extracted_entities": 0,
+            "extracted_relations": 0,
+            "vault_auto_writes": 0,
+            "vault_review_items": 0,
+            "stored_in_postgres": False,
+            "dedupe_explain": {
+                "similarity": round(duplicate_similarity, 4),
+                "threshold": dedupe_threshold,
+                "window_minutes": dedupe_window,
+                "window_policy": "kind_weighted",
+                "force_store": force_store,
+                "matched_kind": normalized.get("kind", ""),
+                "matched_project": normalized.get("project", ""),
+                "matched_source": normalized.get("source", ""),
+            },
+            "event": duplicate_of,
+        }
     append_jsonl(settings["memory_log_path"], normalized)
 
     stored_in_graph = False
@@ -1132,11 +1390,23 @@ def persist_event(event: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "ok": True,
+        "deduplicated": False,
+        "duplicate_event_id": "",
         "stored_in_graph": stored_in_graph,
         "extracted_entities": len(extracted.get("entities", [])),
         "extracted_relations": len(extracted.get("relations", [])),
         "vault_auto_writes": len(vault_result.get("auto_writes", [])),
         "vault_review_items": len(vault_result.get("review_items", [])),
         "stored_in_postgres": structured_result.get("stored", False),
+        "dedupe_explain": {
+            "similarity": round(duplicate_similarity, 4),
+            "threshold": dedupe_threshold,
+            "window_minutes": dedupe_window,
+            "window_policy": "kind_weighted",
+            "force_store": force_store,
+            "matched_kind": normalized.get("kind", ""),
+            "matched_project": normalized.get("project", ""),
+            "matched_source": normalized.get("source", ""),
+        },
         "event": normalized,
     }

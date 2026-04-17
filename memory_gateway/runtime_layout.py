@@ -14,6 +14,8 @@ DEFAULT_SERVER_PORT = 8765
 DEFAULT_PROFILE = "simple"
 DEFAULT_HELPER_BASE_URL = "http://127.0.0.1:11434/api/generate"
 DEFAULT_HELPER_TIMEOUT_SEC = 15
+DEFAULT_DEDUPE_WINDOW_MINUTES = 30
+DEFAULT_DEDUPE_SIMILARITY_THRESHOLD = 0.86
 
 _SUPPORTED_PROFILES = {"simple", "recommended", "power-user"}
 
@@ -106,6 +108,10 @@ def load_runtime_settings() -> dict[str, Any]:
     neo4j_password = os.environ.get("NEO4J_PASSWORD", "").strip()
     helper_model = os.environ.get("MEMORY_HELPER_MODEL", "").strip()
     helper_enabled = os.environ.get("MEMORY_HELPER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    dedupe_window_minutes = int(os.environ.get("MEMORY_DEDUPE_WINDOW_MINUTES", str(DEFAULT_DEDUPE_WINDOW_MINUTES)))
+    dedupe_similarity_threshold = float(
+        os.environ.get("MEMORY_DEDUPE_SIMILARITY_THRESHOLD", str(DEFAULT_DEDUPE_SIMILARITY_THRESHOLD))
+    )
 
     return {
         "app_home": str(layout["app_home"]),
@@ -129,4 +135,6 @@ def load_runtime_settings() -> dict[str, Any]:
         "helper_model": helper_model,
         "helper_base_url": os.environ.get("MEMORY_HELPER_BASE_URL", DEFAULT_HELPER_BASE_URL),
         "helper_timeout_sec": int(os.environ.get("MEMORY_HELPER_TIMEOUT_SEC", str(DEFAULT_HELPER_TIMEOUT_SEC))),
+        "dedupe_window_minutes": max(1, dedupe_window_minutes),
+        "dedupe_similarity_threshold": min(0.99, max(0.5, dedupe_similarity_threshold)),
     }

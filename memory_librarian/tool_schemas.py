@@ -260,6 +260,32 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "memory_brain_doctor",
+        "title": "Brain Doctor",
+        "description": "Run an end-to-end local health check across gateway, launch agent, storage, and helper.",
+        "inputSchema": {"type": "object", "properties": {**FORMAT_PROP}},
+    },
+    {
+        "name": "memory_compact_day",
+        "title": "Compact Day",
+        "description": "Build a compact per-day capsule from JSONL for fast recall.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "UTC date prefix, e.g. 2026-04-17"},
+                "project": {"type": "string", "default": ""},
+                **FORMAT_PROP,
+            },
+            "required": ["date"],
+        },
+    },
+    {
+        "name": "memory_entity_hygiene",
+        "title": "Entity Hygiene",
+        "description": "Inspect duplicate entity clusters and repair missing graph project-day neighborhoods when possible.",
+        "inputSchema": {"type": "object", "properties": {**FORMAT_PROP}},
+    },
+    {
         "name": "memory_today_summary",
         "title": "Today Summary",
         "description": "Summarize today's memories, optionally scoped to one project.",

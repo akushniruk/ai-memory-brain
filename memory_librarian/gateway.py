@@ -46,3 +46,6 @@ from memory_store import (  # noqa: E402  pylint: disable=wrong-import-position
     search_graph,
     summarize_events_with_helper,
 )
+from brain_doctor import run_doctor  # noqa: E402  pylint: disable=wrong-import-position
+from compact_day import build_day_capsule  # noqa: E402  pylint: disable=wrong-import-position
+from entity_hygiene import run_entity_hygiene  # noqa: E402  pylint: disable=wrong-import-position

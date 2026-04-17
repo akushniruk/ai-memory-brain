@@ -20,7 +20,11 @@ class MemoryHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            # Client disconnected before receiving payload; server stays healthy.
+            return
 
     def _summarize_transcript(self, transcript_path: str, project: str, cwd: str) -> dict:
         """Parse transcript and summarize via Ollama/Gemma4, fallback to rule-based."""
@@ -33,7 +37,8 @@ class MemoryHandler(BaseHTTPRequestHandler):
         helper_enabled = os.environ.get("MEMORY_HELPER_ENABLED", "0").lower() in ("1", "true", "yes", "on")
         helper_model = os.environ.get("MEMORY_HELPER_MODEL", "").strip()
         helper_base_url = os.environ.get("MEMORY_HELPER_BASE_URL", "http://127.0.0.1:11434/api/generate")
-        helper_timeout = int(os.environ.get("MEMORY_HELPER_TIMEOUT_SEC", "15"))
+        # Keep summarize endpoint responsive for local clients/tests even when helper is unreachable.
+        helper_timeout = min(int(os.environ.get("MEMORY_HELPER_TIMEOUT_SEC", "15")), 4)
 
         if helper_enabled and helper_model and parsed["goal"]:
             tool_names = ", ".join(parsed["tools"]) if parsed["tools"] else "none"
