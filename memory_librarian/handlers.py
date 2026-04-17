@@ -2,22 +2,33 @@ from __future__ import annotations
 
 import json
 from typing import Any
+import uuid
 
 from gateway import (
     approve_review_queue_item,
     get_brain_health,
+    get_cleanup_candidates,
+    get_execution_hints,
     get_entity_context,
     get_events_by_date,
     get_graph_overview,
     get_graph_project_day,
     get_graph_recent,
+    get_machine_context,
+    get_memory_quality_report,
+    get_open_loops,
     get_postgres_bridge_writes,
     get_postgres_recent_events,
     get_postgres_review_queue,
     get_postgres_status,
+    mark_memory_superseded,
+    promote_memory_to_canon,
+    get_project_canon,
     get_project_context,
     get_recent_events,
     get_review_queue,
+    get_task_context,
+    get_timeline,
     get_today_graph,
     get_today_summary,
     get_vault_status,
@@ -27,6 +38,8 @@ from gateway import (
     repair_graph,
     search_events,
     search_graph,
+    start_session,
+    store_structured_memory,
     summarize_events_with_helper,
     run_doctor,
     build_day_capsule,
@@ -112,6 +125,18 @@ def merge_metadata(arguments: dict[str, Any]) -> dict[str, Any]:
     branch = arguments.get("branch") or ""
     if branch:
         metadata.setdefault("branch", branch)
+    repo_context: dict[str, Any] = dict(metadata.get("repo_context") or {})
+    commit_sha = str(arguments.get("commit_sha", "") or "").strip()
+    if commit_sha:
+        repo_context.setdefault("commit_sha", commit_sha)
+    if branch:
+        repo_context.setdefault("branch", branch)
+    for field in ("files_touched", "commands_run", "tests", "artifacts"):
+        raw_value = arguments.get(field, [])
+        if raw_value:
+            repo_context[field] = raw_value
+    if repo_context:
+        metadata["repo_context"] = repo_context
     return metadata
 
 
@@ -169,6 +194,20 @@ def _has_summary_sections(summary: str) -> bool:
     return all(marker in normalized for marker in required_markers)
 
 
+def validated_string_list(arguments: dict[str, Any], field_name: str) -> list[str]:
+    raw_values = arguments.get(field_name, [])
+    if not isinstance(raw_values, list):
+        raise ValueError(f"{field_name} must be an array of strings")
+    values: list[str] = []
+    for item in raw_values:
+        if not isinstance(item, str):
+            raise ValueError(f"{field_name} must be an array of strings")
+        text = item.strip()
+        if text:
+            values.append(text)
+    return values
+
+
 def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     fmt = str(arguments.get("format", "full"))
     max_text = int(arguments.get("max_text_chars", 400))
@@ -193,6 +232,164 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             kind="task_summary",
         )
         result = persist_event(payload)
+        return tool_result(result)
+
+    if name == "memory_store_structured":
+        result = store_structured_memory(
+            kind=str(arguments.get("kind", "task_summary")),
+            source=str(arguments.get("source", "agent")),
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            importance=validated_importance(arguments),
+            tags=validated_tags(arguments),
+            graph=bool(arguments.get("graph", False)),
+            metadata=merge_metadata(arguments),
+            timestamp=str(arguments.get("timestamp", "") or ""),
+            repo_context={
+                "branch": str(arguments.get("branch", "") or ""),
+                "commit_sha": str(arguments.get("commit_sha", "") or ""),
+                "files_touched": validated_string_list(arguments, "files_touched"),
+                "commands_run": validated_string_list(arguments, "commands_run"),
+                "tests": validated_string_list(arguments, "tests"),
+                "artifacts": validated_string_list(arguments, "artifacts"),
+            },
+            goal=str(arguments.get("goal", "")),
+            changes=str(arguments.get("changes", "")),
+            decision=str(arguments.get("decision", "")),
+            why=str(arguments.get("why", "")),
+            validation=str(arguments.get("validation", "")),
+            next_step=str(arguments.get("next_step", "")),
+            risk=str(arguments.get("risk", "")),
+            title=str(arguments.get("title", "")),
+            summary=str(arguments.get("summary", "")),
+            status=str(arguments.get("status", "")),
+        )
+        return tool_result(result)
+
+    if name == "memory_store_failed_attempt":
+        result = store_structured_memory(
+            kind="failed_attempt",
+            source=str(arguments.get("source", "agent")),
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            importance=validated_importance(arguments),
+            tags=validated_tags(arguments),
+            graph=bool(arguments.get("graph", True)),
+            metadata=merge_metadata(arguments),
+            timestamp=str(arguments.get("timestamp", "") or ""),
+            repo_context={
+                "branch": str(arguments.get("branch", "") or ""),
+                "commit_sha": str(arguments.get("commit_sha", "") or ""),
+                "files_touched": validated_string_list(arguments, "files_touched"),
+                "commands_run": validated_string_list(arguments, "commands_run"),
+                "tests": validated_string_list(arguments, "tests"),
+                "artifacts": validated_string_list(arguments, "artifacts"),
+            },
+            goal=str(arguments.get("goal", "")),
+            changes=str(arguments.get("changes", "")),
+            decision=str(arguments.get("decision", "")),
+            why=str(arguments.get("why", "")),
+            validation=str(arguments.get("validation", "")),
+            next_step=str(arguments.get("next_step", "")),
+            risk=str(arguments.get("risk", "")),
+            title=str(arguments.get("title", "")),
+            summary=str(arguments.get("summary", "")),
+            status="failed",
+        )
+        return tool_result(result)
+
+    if name == "memory_promote_canon":
+        payload = promote_memory_to_canon(
+            event_id=str(arguments["event_id"]),
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            title=str(arguments.get("title", "")),
+            kind=str(arguments.get("kind", "project_fact")),
+            note=str(arguments.get("note", "")),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
+
+    if name == "memory_mark_superseded":
+        payload = mark_memory_superseded(
+            old_event_id=str(arguments["old_event_id"]),
+            new_event_id=str(arguments.get("new_event_id", "")),
+            reason=str(arguments.get("reason", "")),
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
+
+    if name == "memory_open_loop_add":
+        metadata = merge_metadata(arguments)
+        loop_id = str(arguments.get("loop_id", "") or "").strip() or str(uuid.uuid4())
+        metadata["loop_id"] = loop_id
+        metadata["title"] = str(arguments.get("title", ""))
+        metadata["status"] = str(arguments.get("status", "open"))
+        metadata["next_step"] = str(arguments.get("next_step", ""))
+        metadata["risk"] = str(arguments.get("risk", ""))
+        metadata["files_touched"] = validated_string_list(arguments, "files_touched")
+        metadata["commands_run"] = validated_string_list(arguments, "commands_run")
+        result = store_structured_memory(
+            kind="open_loop",
+            source=str(arguments.get("source", "agent")),
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            importance=validated_importance(arguments),
+            tags=validated_tags(arguments),
+            graph=bool(arguments.get("graph", False)),
+            metadata=metadata,
+            timestamp=str(arguments.get("timestamp", "") or ""),
+            repo_context={
+                "branch": str(arguments.get("branch", "") or ""),
+                "commit_sha": str(arguments.get("commit_sha", "") or ""),
+                "files_touched": validated_string_list(arguments, "files_touched"),
+                "commands_run": validated_string_list(arguments, "commands_run"),
+                "tests": validated_string_list(arguments, "tests"),
+                "artifacts": validated_string_list(arguments, "artifacts"),
+            },
+            goal=str(arguments.get("title", "")),
+            next_step=str(arguments.get("next_step", "")),
+            risk=str(arguments.get("risk", "")),
+            summary=str(arguments.get("note", "")),
+            status=str(arguments.get("status", "open")),
+            title=str(arguments.get("title", "")),
+        )
+        return tool_result(result)
+
+    if name == "memory_open_loop_update":
+        metadata = merge_metadata(arguments)
+        metadata["loop_id"] = str(arguments["loop_id"])
+        metadata["status"] = str(arguments.get("status", "open"))
+        metadata["title"] = str(arguments.get("title", ""))
+        metadata["next_step"] = str(arguments.get("next_step", ""))
+        metadata["risk"] = str(arguments.get("risk", ""))
+        metadata["note"] = str(arguments.get("note", ""))
+        metadata["files_touched"] = validated_string_list(arguments, "files_touched")
+        metadata["commands_run"] = validated_string_list(arguments, "commands_run")
+        result = store_structured_memory(
+            kind="open_loop_update",
+            source=str(arguments.get("source", "agent")),
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            importance=validated_importance(arguments),
+            tags=validated_tags(arguments),
+            graph=bool(arguments.get("graph", False)),
+            metadata=metadata,
+            timestamp=str(arguments.get("timestamp", "") or ""),
+            repo_context={
+                "branch": str(arguments.get("branch", "") or ""),
+                "commit_sha": str(arguments.get("commit_sha", "") or ""),
+                "files_touched": validated_string_list(arguments, "files_touched"),
+                "commands_run": validated_string_list(arguments, "commands_run"),
+                "tests": validated_string_list(arguments, "tests"),
+                "artifacts": validated_string_list(arguments, "artifacts"),
+            },
+            next_step=str(arguments.get("next_step", "")),
+            risk=str(arguments.get("risk", "")),
+            summary=str(arguments.get("note", "")),
+            status=str(arguments.get("status", "open")),
+            title=str(arguments.get("title", "")),
+        )
         return tool_result(result)
 
     if name == "memory_meeting_summary":
@@ -256,6 +453,15 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         )
         return tool_result(maybe_compact_payload(payload, fmt, max_text))
 
+    if name == "memory_open_loops":
+        payload = get_open_loops(
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            status=str(arguments.get("status", "")),
+            limit=int(arguments.get("limit", 20)),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
     if name == "memory_review_approve":
         payload = approve_review_queue_item(
             queue_key=arguments["queue_key"],
@@ -303,7 +509,7 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
 
     if name == "memory_brain_doctor":
         payload = maintenance_contract(run_doctor(), tool_name=name, fmt=fmt)
-        return tool_result(maybe_compact_payload(payload, fmt, max_text), is_error=not payload.get("ok", False))
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
 
     if name == "memory_compact_day":
         date = arguments["date"]
@@ -319,6 +525,85 @@ def call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         project = arguments.get("project", "")
         date = arguments.get("date", "")
         payload = get_today_summary(project=project, date=date)
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_start_session":
+        payload = start_session(
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            query=str(arguments.get("query", "")),
+            file_paths=validated_string_list(arguments, "file_paths"),
+            limit=int(arguments.get("limit", 8)),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_task_context":
+        payload = get_task_context(
+            arguments["query"],
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            file_paths=validated_string_list(arguments, "file_paths"),
+            limit=int(arguments.get("limit", 10)),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_project_canon":
+        payload = get_project_canon(
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            limit=int(arguments.get("limit", 12)),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_machine_context":
+        payload = get_machine_context(
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            limit=int(arguments.get("limit", 12)),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_execution_hints":
+        payload = get_execution_hints(
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            limit=int(arguments.get("limit", 8)),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_timeline":
+        payload = get_timeline(
+            project=str(arguments.get("project", "")),
+            cwd=str(arguments.get("cwd", "")),
+            since=str(arguments.get("since", "")),
+            until=str(arguments.get("until", "")),
+            days=int(arguments.get("days", 7)),
+            limit=int(arguments.get("limit", 30)),
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_quality_report":
+        payload = maintenance_contract(
+            get_memory_quality_report(
+                project=str(arguments.get("project", "")),
+                cwd=str(arguments.get("cwd", "")),
+                limit=int(arguments.get("limit", 100)),
+            ),
+            tool_name=name,
+            fmt=fmt,
+        )
+        return tool_result(maybe_compact_payload(payload, fmt, max_text))
+
+    if name == "memory_cleanup_candidates":
+        payload = maintenance_contract(
+            get_cleanup_candidates(
+                project=str(arguments.get("project", "")),
+                cwd=str(arguments.get("cwd", "")),
+                limit=int(arguments.get("limit", 20)),
+            ),
+            tool_name=name,
+            fmt=fmt,
+        )
         return tool_result(maybe_compact_payload(payload, fmt, max_text))
 
     if name == "memory_repair_graph":

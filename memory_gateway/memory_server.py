@@ -6,7 +6,7 @@ from pathlib import Path
 
 from memory_store import persist_event
 from runtime_layout import load_runtime_env
-from transcript_parser import build_rule_based_summary, parse_transcript
+from transcript_parser import build_rule_based_summary, build_structured_session_memory, parse_transcript
 
 load_runtime_env(Path(__file__).resolve().parent)
 
@@ -68,11 +68,23 @@ class MemoryHandler(BaseHTTPRequestHandler):
                     outer = json.loads(resp.read().decode("utf-8"))
                 summary = str(outer.get("response", "")).strip()
                 if summary:
-                    return {"summary": summary, "used_llm": True, "turn_count": parsed["turn_count"]}
+                    structured = build_structured_session_memory(parsed, summary_text=summary)
+                    return {
+                        "summary": structured["summary"],
+                        "used_llm": True,
+                        "turn_count": parsed["turn_count"],
+                        "structured": structured,
+                    }
             except (urllib_error.URLError, TimeoutError, OSError):
                 pass
 
-        return {"summary": rule_based, "used_llm": False, "turn_count": parsed["turn_count"]}
+        structured = build_structured_session_memory(parsed, summary_text="")
+        return {
+            "summary": rule_based,
+            "used_llm": False,
+            "turn_count": parsed["turn_count"],
+            "structured": structured,
+        }
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":

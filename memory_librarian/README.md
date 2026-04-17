@@ -18,10 +18,25 @@ Tools:
 
 - `memory_add`
 - `memory_store_summary`
+- `memory_store_structured`
+- `memory_store_failed_attempt`
+- `memory_open_loop_add`
+- `memory_open_loop_update`
+- `memory_open_loops`
+- `memory_promote_canon`
+- `memory_mark_superseded`
 - `memory_search`
 - `memory_recent`
 - `memory_by_date` / `memory_get_date`
 - `memory_project_context`
+- `memory_start_session`
+- `memory_task_context`
+- `memory_project_canon`
+- `memory_machine_context`
+- `memory_execution_hints`
+- `memory_timeline`
+- `memory_quality_report`
+- `memory_cleanup_candidates`
 - `memory_entity_context`
 - `memory_daily_summary`
 

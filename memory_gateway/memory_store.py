@@ -3,6 +3,7 @@ from collections import Counter
 from difflib import SequenceMatcher
 import logging
 import re
+import subprocess
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +47,10 @@ GRAPH_KINDS = {
     "decision",
     "project_fact",
     "task_summary",
+    "failed_attempt",
+    "open_loop",
+    "open_loop_update",
+    "supersession",
     "bug",
     "fix",
     "milestone",
@@ -60,7 +65,21 @@ EXTRACT_KINDS = {
     "identity",
     "preference",
     "milestone",
+    "failed_attempt",
+    "open_loop",
 }
+
+STRUCTURED_SUMMARY_FIELDS = (
+    "goal",
+    "changes",
+    "decision",
+    "why",
+    "validation",
+    "next_step",
+    "risk",
+)
+
+ACTIVE_LOOP_STATUSES = {"open", "blocked", "in_progress"}
 
 LOW_SIGNAL_QUERY_TOKENS = {
     "a",
@@ -249,6 +268,181 @@ def _safe_name(value: Any) -> str:
 def _safe_rel_type(value: Any) -> str:
     raw = re.sub(r"[^A-Za-z0-9_]+", "_", str(value or "").strip().lower())
     return raw[:64] if raw else "related_to"
+
+
+def _listify_str_values(value: Any) -> list[str]:
+    if isinstance(value, list):
+        items = value
+    elif value in (None, "", []):
+        return []
+    else:
+        items = [value]
+    out: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _metadata(event: dict[str, Any]) -> dict[str, Any]:
+    raw = event.get("metadata", {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _structured_metadata(event: dict[str, Any]) -> dict[str, Any]:
+    value = _metadata(event).get("structured", {})
+    return value if isinstance(value, dict) else {}
+
+
+def _structured_field(event: dict[str, Any], key: str) -> str:
+    value = _structured_metadata(event).get(key, "")
+    return str(value or "").strip()
+
+
+def _repo_context(event: dict[str, Any]) -> dict[str, Any]:
+    value = _metadata(event).get("repo_context", {})
+    return value if isinstance(value, dict) else {}
+
+
+def _event_files(event: dict[str, Any]) -> list[str]:
+    repo_context = _repo_context(event)
+    return _listify_str_values(repo_context.get("files_touched", []))
+
+
+def _event_commands(event: dict[str, Any]) -> list[str]:
+    repo_context = _repo_context(event)
+    return _listify_str_values(repo_context.get("commands_run", []))
+
+
+def _event_tests(event: dict[str, Any]) -> list[str]:
+    repo_context = _repo_context(event)
+    return _listify_str_values(repo_context.get("tests", []))
+
+
+def _event_artifacts(event: dict[str, Any]) -> list[str]:
+    repo_context = _repo_context(event)
+    return _listify_str_values(repo_context.get("artifacts", []))
+
+
+def _event_branch(event: dict[str, Any]) -> str:
+    repo_context = _repo_context(event)
+    branch = str(repo_context.get("branch", "") or "").strip()
+    if branch:
+        return branch
+    return str(_metadata(event).get("branch", "") or "").strip()
+
+
+def _event_commit(event: dict[str, Any]) -> str:
+    repo_context = _repo_context(event)
+    return str(repo_context.get("commit_sha", "") or "").strip()
+
+
+def _structured_items(value: str) -> list[str]:
+    lines = []
+    for raw_line in str(value or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[-*]\s*", "", line)
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _first_structured_item(event: dict[str, Any], key: str) -> str:
+    items = _structured_items(_structured_field(event, key))
+    return items[0] if items else ""
+
+
+def _extract_summary_sections(text: str) -> dict[str, str]:
+    sections = {key: "" for key in STRUCTURED_SUMMARY_FIELDS}
+    aliases = {
+        "goal": "goal",
+        "changes": "changes",
+        "decision": "decision",
+        "decisions": "decision",
+        "why": "why",
+        "validation": "validation",
+        "next step": "next_step",
+        "next steps": "next_step",
+        "risks/todo": "risk",
+        "risk/todo": "risk",
+        "risks": "risk",
+        "risk": "risk",
+    }
+    current = ""
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        matched = re.match(r"^([A-Za-z /]+):\s*(.*)$", line)
+        if matched:
+            label = matched.group(1).strip().lower()
+            key = aliases.get(label)
+            if key:
+                current = key
+                sections[current] = matched.group(2).strip()
+                continue
+        if current:
+            sections[current] = (sections[current] + "\n" + line).strip()
+    return sections
+
+
+def _open_loop_status(raw_status: Any) -> str:
+    status = str(raw_status or "").strip().lower()
+    if status in {"open", "blocked", "in_progress", "resolved", "abandoned", "superseded"}:
+        return status
+    return "open"
+
+
+def _event_scope_match(event: dict[str, Any], *, project: str = "", cwd: str = "") -> bool:
+    if project and str(event.get("project", "")).strip() != project:
+        return False
+    if cwd and str(event.get("cwd", "")).strip() != cwd:
+        return False
+    return True
+
+
+def _git_changed_files(cwd: str) -> list[str]:
+    target = str(cwd or "").strip()
+    if not target:
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "-C", target, "diff", "--name-only", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _supersession_map(events: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    mapping: dict[str, dict[str, str]] = {}
+    for event in events:
+        if str(event.get("kind", "")).strip().lower() != "supersession":
+            continue
+        md = _metadata(event)
+        old_event_id = str(md.get("old_event_id", "") or "").strip()
+        if not old_event_id:
+            continue
+        mapping[old_event_id] = {
+            "new_event_id": str(md.get("new_event_id", "") or "").strip(),
+            "reason": str(md.get("reason", "") or "").strip(),
+            "supersession_event_id": str(event.get("id", "") or "").strip(),
+        }
+    return mapping
+
+
+def _is_superseded(event: dict[str, Any], supersession_map: dict[str, dict[str, str]]) -> bool:
+    event_id = str(event.get("id", "") or "").strip()
+    if not event_id:
+        return False
+    return event_id in supersession_map
 
 
 def _project_key(value: str) -> str:
@@ -632,7 +826,12 @@ def _matches_filter(event: dict[str, Any], *, project: str = "", source: str = "
 def get_recent_events(limit: int = 20, *, project: str = "", source: str = "", kind: str = "") -> list[dict[str, Any]]:
     settings = load_settings()
     events = read_jsonl_events(settings["memory_log_path"])
-    filtered = [event for event in events if _matches_filter(event, project=project, source=source, kind=kind)]
+    supersession_map = _supersession_map(events)
+    filtered = [
+        event
+        for event in events
+        if _matches_filter(event, project=project, source=source, kind=kind) and not _is_superseded(event, supersession_map)
+    ]
     ordered = list(reversed(filtered[-limit:]))
     annotated: list[dict[str, Any]] = []
     for idx, event in enumerate(ordered):
@@ -656,9 +855,12 @@ def get_recent_events(limit: int = 20, *, project: str = "", source: str = "", k
 def get_events_by_date(date_str: str, *, project: str = "", source: str = "", kind: str = "") -> list[dict[str, Any]]:
     settings = load_settings()
     events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
     filtered: list[dict[str, Any]] = []
     for event in events:
         if not _matches_filter(event, project=project, source=source, kind=kind):
+            continue
+        if _is_superseded(event, supersession_map):
             continue
         timestamp = str(event.get("timestamp", ""))
         if timestamp.startswith(date_str):
@@ -669,6 +871,7 @@ def get_events_by_date(date_str: str, *, project: str = "", source: str = "", ki
 def search_events(query: str, limit: int = 10, *, project: str = "", source: str = "", kind: str = "") -> list[dict[str, Any]]:
     settings = load_settings()
     events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
     query_lower = query.lower().strip()
     raw_query_tokens = [token for token in re.findall(r"[a-z0-9_]+", query_lower) if token]
     signal_tokens = [token for token in raw_query_tokens if token not in LOW_SIGNAL_QUERY_TOKENS]
@@ -678,6 +881,8 @@ def search_events(query: str, limit: int = 10, *, project: str = "", source: str
 
     for event in events:
         if not _matches_filter(event, project=project, source=source, kind=kind):
+            continue
+        if _is_superseded(event, supersession_map):
             continue
 
         haystacks = [
@@ -788,6 +993,750 @@ def get_project_context(project: str, limit: int = 12) -> dict[str, list[dict[st
     return {
         "important": important,
         "recent": recent,
+    }
+
+
+def _build_structured_summary_text(fields: dict[str, Any]) -> str:
+    rendered: list[str] = []
+    label_map = {
+        "goal": "Goal",
+        "changes": "Changes",
+        "decision": "Decisions",
+        "why": "Why",
+        "validation": "Validation",
+        "next_step": "Next Step",
+        "risk": "Risks/TODO",
+    }
+    for key in STRUCTURED_SUMMARY_FIELDS:
+        value = str(fields.get(key, "") or "").strip()
+        if value:
+            rendered.append(f"{label_map[key]}: {value}")
+    return "\n".join(rendered)
+
+
+def store_structured_memory(
+    *,
+    kind: str = "task_summary",
+    source: str = "agent",
+    project: str = "",
+    cwd: str = "",
+    importance: str = "normal",
+    tags: list[str] | None = None,
+    graph: bool = False,
+    metadata: dict[str, Any] | None = None,
+    timestamp: str = "",
+    repo_context: dict[str, Any] | None = None,
+    goal: str = "",
+    changes: str = "",
+    decision: str = "",
+    why: str = "",
+    validation: str = "",
+    next_step: str = "",
+    risk: str = "",
+    title: str = "",
+    summary: str = "",
+    status: str = "",
+) -> dict[str, Any]:
+    structured = {
+        "goal": goal,
+        "changes": changes,
+        "decision": decision,
+        "why": why,
+        "validation": validation,
+        "next_step": next_step,
+        "risk": risk,
+        "title": title,
+        "status": status,
+        "summary": summary,
+    }
+    text = str(summary or "").strip() or _build_structured_summary_text(structured)
+    event_metadata = dict(metadata or {})
+    event_metadata["structured"] = {key: value for key, value in structured.items() if str(value or "").strip()}
+    if repo_context:
+        event_metadata["repo_context"] = {
+            key: value
+            for key, value in dict(repo_context).items()
+            if value not in ("", [], {}, None)
+        }
+    payload: dict[str, Any] = {
+        "text": text,
+        "kind": kind,
+        "source": source,
+        "project": project,
+        "cwd": cwd,
+        "importance": importance,
+        "tags": tags or [],
+        "graph": graph,
+        "metadata": event_metadata,
+    }
+    if timestamp:
+        payload["timestamp"] = timestamp
+    return persist_event(payload)
+
+
+def _auto_open_loop_payload(event: dict[str, Any]) -> dict[str, Any] | None:
+    kind = str(event.get("kind", "")).strip().lower()
+    if kind in {"open_loop", "open_loop_update", "daily_checkin", "daily_checkout"}:
+        return None
+    metadata = _metadata(event)
+    if metadata.get("auto_open_loop") is False:
+        return None
+    structured = _structured_metadata(event)
+    next_step = str(structured.get("next_step", "") or "").strip()
+    risk = str(structured.get("risk", "") or "").strip()
+    if not next_step and not risk:
+        return None
+    title = (
+        str(structured.get("title", "") or "").strip()
+        or str(structured.get("goal", "") or "").strip()
+        or f"Follow-up from {kind}"
+    )
+    loop_id = str(metadata.get("loop_id", "") or metadata.get("auto_open_loop_id", "") or event.get("id", "")).strip()
+    repo_context = dict(_repo_context(event))
+    loop_metadata = {
+        "loop_id": loop_id,
+        "title": title,
+        "status": "open",
+        "next_step": next_step,
+        "risk": risk,
+        "auto_generated_from": str(event.get("id", "")),
+        "auto_open_loop": False,
+    }
+    files = _event_files(event)
+    commands = _event_commands(event)
+    if files:
+        loop_metadata["files_touched"] = files
+    if commands:
+        loop_metadata["commands_run"] = commands
+    return {
+        "text": _build_structured_summary_text(
+            {
+                "goal": title,
+                "next_step": next_step,
+                "risk": risk,
+            }
+        ),
+        "kind": "open_loop",
+        "source": event.get("source", "agent"),
+        "project": event.get("project", ""),
+        "cwd": event.get("cwd", ""),
+        "importance": "high" if event.get("importance") == "high" else "normal",
+        "tags": list(dict.fromkeys([*event.get("tags", []), "auto-open-loop"])),
+        "graph": bool(event.get("graph", False)),
+        "metadata": {
+            **loop_metadata,
+            "structured": {
+                "title": title,
+                "goal": title,
+                "next_step": next_step,
+                "risk": risk,
+                "status": "open",
+            },
+            "repo_context": repo_context,
+        },
+        "timestamp": event.get("timestamp", ""),
+    }
+
+
+def _collect_open_loops(events: list[dict[str, Any]], *, project: str = "", cwd: str = "") -> list[dict[str, Any]]:
+    loops: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if not _event_scope_match(event, project=project, cwd=cwd):
+            continue
+        kind = str(event.get("kind", "")).strip().lower()
+        if kind not in {"open_loop", "open_loop_update"}:
+            continue
+        md = _metadata(event)
+        loop_id = str(md.get("loop_id", "") or event.get("id", "")).strip()
+        if not loop_id:
+            continue
+        existing = loops.get(loop_id, {})
+        structured = _structured_metadata(event)
+        title = str(md.get("title", "") or structured.get("title", "") or existing.get("title", "")).strip()
+        note = str(md.get("note", "") or event.get("text", "")).strip()
+        next_step = str(md.get("next_step", "") or structured.get("next_step", "") or existing.get("next_step", "")).strip()
+        risk = str(md.get("risk", "") or structured.get("risk", "") or existing.get("risk", "")).strip()
+        status = _open_loop_status(md.get("status", existing.get("status", "open")))
+        files_touched = _listify_str_values(md.get("files_touched", [])) or existing.get("files_touched", [])
+        commands_run = _listify_str_values(md.get("commands_run", [])) or existing.get("commands_run", [])
+        record = {
+            "loop_id": loop_id,
+            "title": title,
+            "status": status,
+            "project": event.get("project", ""),
+            "cwd": event.get("cwd", ""),
+            "kind": kind,
+            "created_at": existing.get("created_at", event.get("timestamp", "")),
+            "updated_at": event.get("timestamp", ""),
+            "note": note,
+            "next_step": next_step,
+            "risk": risk,
+            "files_touched": files_touched,
+            "commands_run": commands_run,
+            "source_event_id": event.get("id", ""),
+        }
+        loops[loop_id] = record
+    return sorted(loops.values(), key=lambda item: item.get("updated_at", ""), reverse=True)
+
+
+def get_open_loops(
+    *,
+    project: str = "",
+    cwd: str = "",
+    status: str = "",
+    limit: int = 20,
+) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    loops = _collect_open_loops(events, project=project, cwd=cwd)
+    if status:
+        loops = [item for item in loops if item.get("status") == status]
+    return {
+        "project": project,
+        "cwd": cwd,
+        "status": status or "all",
+        "count": min(limit, len(loops)),
+        "items": loops[:limit],
+    }
+
+
+def _task_context_score(
+    event: dict[str, Any],
+    *,
+    query_tokens: list[str],
+    file_paths: list[str],
+    active_files: list[str],
+    project: str = "",
+    cwd: str = "",
+) -> tuple[float, dict[str, float]]:
+    haystacks = [
+        str(event.get("text", "")),
+        str(event.get("kind", "")),
+        str(event.get("project", "")),
+        " ".join(_event_files(event)),
+        " ".join(_event_commands(event)),
+        " ".join(_event_tests(event)),
+    ]
+    combined = " ".join(haystacks).lower()
+    score = 0.0
+    breakdown = {
+        "token_match": 0.0,
+        "file_overlap": 0.0,
+        "active_diff_overlap": 0.0,
+        "project_scope": 0.0,
+        "cwd_scope": 0.0,
+        "importance": 0.0,
+        "recency": 0.0,
+        "open_loop": 0.0,
+        "validation": 0.0,
+        "negative_memory": 0.0,
+    }
+    if query_tokens:
+        token_hits = sum(1 for token in query_tokens if token in combined)
+        breakdown["token_match"] = float(token_hits)
+        score += float(token_hits)
+    if file_paths:
+        files = " ".join(_event_files(event)).lower()
+        overlap = sum(1 for path in file_paths if path.lower() in files)
+        breakdown["file_overlap"] = float(overlap) * 2.0
+        score += breakdown["file_overlap"]
+    if active_files:
+        files = " ".join(_event_files(event)).lower()
+        active_overlap = sum(1 for path in active_files if path.lower() in files)
+        breakdown["active_diff_overlap"] = float(active_overlap) * 2.5
+        score += breakdown["active_diff_overlap"]
+    if project and str(event.get("project", "")) == project:
+        breakdown["project_scope"] = 3.0
+        score += 3.0
+    if cwd and str(event.get("cwd", "")) == cwd:
+        breakdown["cwd_scope"] = 2.0
+        score += 2.0
+    if event.get("importance") == "high":
+        breakdown["importance"] = 2.0
+        score += 2.0
+    if str(event.get("kind", "")) == "open_loop":
+        breakdown["open_loop"] = 2.5
+        score += 2.5
+    if _structured_field(event, "validation") or _event_tests(event):
+        breakdown["validation"] = 1.0
+        score += 1.0
+    if str(event.get("kind", "")) in {"failed_attempt", "bug"}:
+        breakdown["negative_memory"] = 1.25
+        score += 1.25
+    event_time = _parse_iso8601(str(event.get("timestamp", "")))
+    if event_time is not None:
+        age_days = max(0.0, (datetime.now(timezone.utc) - event_time.astimezone(timezone.utc)).total_seconds() / 86400.0)
+        breakdown["recency"] = max(0.0, 2.5 - min(2.5, age_days / 5.0))
+        score += breakdown["recency"]
+    return score, breakdown
+
+
+def get_task_context(
+    query: str,
+    *,
+    project: str = "",
+    cwd: str = "",
+    file_paths: list[str] | None = None,
+    limit: int = 10,
+) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    query_tokens = [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if token not in LOW_SIGNAL_QUERY_TOKENS]
+    paths = _listify_str_values(file_paths or [])
+    active_files = _git_changed_files(cwd)
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for event in events:
+        if project and str(event.get("project", "")) != project:
+            continue
+        if _is_superseded(event, supersession_map):
+            continue
+        score, breakdown = _task_context_score(
+            event,
+            query_tokens=query_tokens,
+            file_paths=paths,
+            active_files=active_files,
+            project=project,
+            cwd=cwd,
+        )
+        if score <= 0.0:
+            continue
+        annotated = dict(event)
+        annotated["retrieval"] = {
+            "score": round(score, 3),
+            "confidence": round(_clamp_confidence(score / 12.0), 3),
+            "match_type": "task_context",
+            "score_breakdown": {key: round(value, 3) for key, value in breakdown.items()},
+        }
+        scored.append((score, annotated))
+    scored.sort(key=lambda item: (item[0], item[1].get("timestamp", "")), reverse=True)
+    results = [event for _, event in scored[:limit]]
+    negative = [event for event in results if str(event.get("kind", "")) in {"failed_attempt", "bug"}][:5]
+    validations = [
+        {
+            "event_id": event.get("id", ""),
+            "timestamp": event.get("timestamp", ""),
+            "validation": _structured_field(event, "validation"),
+            "tests": _event_tests(event),
+            "commands_run": _event_commands(event),
+        }
+        for event in results
+        if _structured_field(event, "validation") or _event_tests(event) or _event_commands(event)
+    ][:5]
+    return {
+        "query": query,
+        "project": project,
+        "cwd": cwd,
+        "file_paths": paths,
+        "active_diff_files": active_files,
+        "results": results,
+        "negative_memories": negative,
+        "validations": validations,
+    }
+
+
+def get_project_canon(*, project: str = "", cwd: str = "", limit: int = 12) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    canon: list[dict[str, Any]] = []
+    for event in reversed(events):
+        if not _event_scope_match(event, project=project, cwd=cwd):
+            continue
+        if _is_superseded(event, supersession_map):
+            continue
+        kind = str(event.get("kind", "")).strip().lower()
+        is_canon = bool(_metadata(event).get("canon"))
+        if kind not in {"decision", "preference", "project_fact", "identity"} and not is_canon:
+            continue
+        canon.append(
+            {
+                "event_id": event.get("id", ""),
+                "kind": kind,
+                "timestamp": event.get("timestamp", ""),
+                "text": event.get("text", ""),
+                "project": event.get("project", ""),
+                "importance": event.get("importance", ""),
+                "canon": is_canon,
+            }
+        )
+        if len(canon) >= limit:
+            break
+    return {
+        "project": project,
+        "cwd": cwd,
+        "count": len(canon),
+        "items": canon,
+    }
+
+
+def get_execution_hints(*, project: str = "", cwd: str = "", limit: int = 8) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    commands: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    tests: list[dict[str, Any]] = []
+    seen_commands: set[str] = set()
+    seen_tests: set[str] = set()
+    for event in reversed(events):
+        if not _event_scope_match(event, project=project, cwd=cwd):
+            continue
+        if _is_superseded(event, supersession_map):
+            continue
+        for command in _event_commands(event):
+            if command in seen_commands:
+                continue
+            seen_commands.add(command)
+            commands.append(
+                {
+                    "command": command,
+                    "timestamp": event.get("timestamp", ""),
+                    "event_id": event.get("id", ""),
+                    "validation": _structured_field(event, "validation"),
+                }
+            )
+            if len(commands) >= limit:
+                break
+        for test_name in _event_tests(event):
+            if test_name in seen_tests:
+                continue
+            seen_tests.add(test_name)
+            tests.append(
+                {
+                    "test": test_name,
+                    "timestamp": event.get("timestamp", ""),
+                    "event_id": event.get("id", ""),
+                }
+            )
+            if len(tests) >= limit:
+                break
+        if str(event.get("kind", "")) in {"failed_attempt", "bug"}:
+            warning = _first_structured_item(event, "risk") or _first_structured_item(event, "decision") or str(event.get("text", ""))
+            if warning:
+                warnings.append(
+                    {
+                        "event_id": event.get("id", ""),
+                        "timestamp": event.get("timestamp", ""),
+                        "warning": warning,
+                    }
+                )
+        if len(commands) >= limit and len(tests) >= limit and len(warnings) >= limit:
+            break
+    return {
+        "project": project,
+        "cwd": cwd,
+        "commands": commands[:limit],
+        "tests": tests[:limit],
+        "warnings": warnings[:limit],
+    }
+
+
+def get_timeline(
+    *,
+    project: str = "",
+    cwd: str = "",
+    since: str = "",
+    until: str = "",
+    days: int = 7,
+    limit: int = 30,
+) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    now = datetime.now(timezone.utc)
+    since_time = _parse_iso8601(since) if since else now - timedelta(days=max(1, days))
+    until_time = _parse_iso8601(until) if until else now + timedelta(seconds=1)
+    selected: list[dict[str, Any]] = []
+    for event in reversed(events):
+        if not _event_scope_match(event, project=project, cwd=cwd):
+            continue
+        if _is_superseded(event, supersession_map):
+            continue
+        event_time = _parse_iso8601(str(event.get("timestamp", "")))
+        if event_time is None:
+            continue
+        event_utc = event_time.astimezone(timezone.utc)
+        if event_utc < since_time or event_utc > until_time:
+            continue
+        selected.append(event)
+        if len(selected) >= limit:
+            break
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for event in selected:
+        grouped.setdefault(_event_date(str(event.get("timestamp", ""))), []).append(
+            {
+                "event_id": event.get("id", ""),
+                "timestamp": event.get("timestamp", ""),
+                "kind": event.get("kind", ""),
+                "project": event.get("project", ""),
+                "text": event.get("text", ""),
+            }
+        )
+    return {
+        "project": project,
+        "cwd": cwd,
+        "since": since_time.isoformat(),
+        "until": until_time.isoformat(),
+        "days": [
+            {"date": date, "events": items}
+            for date, items in sorted(grouped.items(), reverse=True)
+        ],
+    }
+
+
+def get_memory_quality_report(*, project: str = "", cwd: str = "", limit: int = 100) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    scoped = [
+        event
+        for event in events
+        if _event_scope_match(event, project=project, cwd=cwd) and not _is_superseded(event, supersession_map)
+    ][-limit:]
+    issues: list[dict[str, Any]] = []
+    normalized_seen: dict[tuple[str, str, str], str] = {}
+    for event in scoped:
+        event_id = str(event.get("id", ""))
+        kind = str(event.get("kind", ""))
+        text_key = _normalized_text_key(str(event.get("text", "")))
+        dedupe_key = (str(event.get("project", "")), kind, text_key)
+        if text_key and dedupe_key in normalized_seen:
+            issues.append({"event_id": event_id, "severity": "warn", "code": "duplicate_text", "message": "near-identical memory already exists"})
+        else:
+            normalized_seen[dedupe_key] = event_id
+        if kind in {"task_summary", "failed_attempt", "fix"}:
+            sections = _structured_metadata(event) or _extract_summary_sections(str(event.get("text", "")))
+            if not str(sections.get("validation", "")).strip():
+                issues.append({"event_id": event_id, "severity": "warn", "code": "missing_validation", "message": "high-signal memory has no validation"})
+            if not str(sections.get("next_step", "")).strip() and kind != "fix":
+                issues.append({"event_id": event_id, "severity": "warn", "code": "missing_next_step", "message": "memory does not capture what to do next"})
+        if kind in {"open_loop", "open_loop_update"}:
+            md = _metadata(event)
+            if not str(md.get("loop_id", "")).strip():
+                issues.append({"event_id": event_id, "severity": "error", "code": "missing_loop_id", "message": "open loop event missing loop_id"})
+        if not str(event.get("project", "")).strip() and not str(event.get("cwd", "")).strip():
+            issues.append({"event_id": event_id, "severity": "warn", "code": "missing_scope", "message": "memory is not scoped to project or cwd"})
+    return {
+        "project": project,
+        "cwd": cwd,
+        "checked_events": len(scoped),
+        "issue_count": len(issues),
+        "issues": issues[:limit],
+    }
+
+
+def promote_memory_to_canon(
+    *,
+    event_id: str,
+    project: str = "",
+    cwd: str = "",
+    title: str = "",
+    kind: str = "project_fact",
+    note: str = "",
+) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    target = next((event for event in events if str(event.get("id", "")) == event_id), None)
+    if target is None:
+        return {"ok": False, "error": f"event_id not found: {event_id}"}
+    target_project = project or str(target.get("project", ""))
+    target_cwd = cwd or str(target.get("cwd", ""))
+    canon_title = title or _first_structured_item(target, "goal") or str(target.get("kind", "canon"))
+    canon_text = note or str(target.get("text", ""))
+    metadata = {
+        "canon": True,
+        "source_event_id": event_id,
+        "canon_title": canon_title,
+        "auto_open_loop": False,
+    }
+    result = store_structured_memory(
+        kind=kind,
+        source="agent",
+        project=target_project,
+        cwd=target_cwd,
+        importance="high",
+        tags=list(dict.fromkeys([*target.get("tags", []), "canon"])),
+        graph=True,
+        metadata=metadata,
+        title=canon_title,
+        summary=canon_text,
+    )
+    return {"ok": True, "source_event_id": event_id, "canon_event": result.get("event", {}), "result": result}
+
+
+def mark_memory_superseded(
+    *,
+    old_event_id: str,
+    new_event_id: str = "",
+    reason: str = "",
+    project: str = "",
+    cwd: str = "",
+) -> dict[str, Any]:
+    metadata = {
+        "old_event_id": old_event_id,
+        "new_event_id": new_event_id,
+        "reason": reason,
+        "auto_open_loop": False,
+    }
+    result = persist_event(
+        {
+            "text": f"Superseded {old_event_id}" + (f" with {new_event_id}" if new_event_id else ""),
+            "kind": "supersession",
+            "source": "agent",
+            "project": project,
+            "cwd": cwd,
+            "importance": "normal",
+            "tags": ["cleanup", "supersession"],
+            "graph": False,
+            "metadata": metadata,
+        }
+    )
+    return {"ok": True, "supersession": result.get("event", {}), "result": result}
+
+
+def get_cleanup_candidates(*, project: str = "", cwd: str = "", limit: int = 20) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    scoped = [
+        event
+        for event in events
+        if _event_scope_match(event, project=project, cwd=cwd) and not _is_superseded(event, supersession_map)
+    ]
+    candidates: list[dict[str, Any]] = []
+    for idx, event in enumerate(scoped):
+        kind = str(event.get("kind", "")).strip().lower()
+        if kind not in {"task_summary", "failed_attempt", "project_fact", "decision"}:
+            continue
+        for other in scoped[idx + 1 :]:
+            if str(other.get("kind", "")).strip().lower() != kind:
+                continue
+            similarity = _text_similarity(str(event.get("text", "")), str(other.get("text", "")))
+            if similarity < 0.88:
+                continue
+            candidates.append(
+                {
+                    "kind": kind,
+                    "similarity": round(similarity, 4),
+                    "older_event_id": event.get("id", ""),
+                    "newer_event_id": other.get("id", ""),
+                    "older_timestamp": event.get("timestamp", ""),
+                    "newer_timestamp": other.get("timestamp", ""),
+                    "older_text": str(event.get("text", ""))[:180],
+                    "newer_text": str(other.get("text", ""))[:180],
+                }
+            )
+            if len(candidates) >= limit:
+                return {"project": project, "cwd": cwd, "count": len(candidates), "items": candidates}
+    return {"project": project, "cwd": cwd, "count": len(candidates), "items": candidates}
+
+
+def get_machine_context(*, project: str = "", cwd: str = "", limit: int = 12) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    scoped = [
+        event
+        for event in events
+        if _event_scope_match(event, project=project, cwd=cwd) and not _is_superseded(event, supersession_map)
+    ]
+    canon = get_project_canon(project=project, cwd=cwd, limit=limit)
+    setup_events: list[dict[str, Any]] = []
+    for event in reversed(scoped):
+        tags = set(event.get("tags", []))
+        text = str(event.get("text", "")).lower()
+        if tags.intersection({"rollout", "setup", "install", "wrappers", "cursor"}) or "wrapper" in text or "cursor" in text:
+            setup_events.append(
+                {
+                    "event_id": event.get("id", ""),
+                    "kind": event.get("kind", ""),
+                    "timestamp": event.get("timestamp", ""),
+                    "text": event.get("text", ""),
+                }
+            )
+        if len(setup_events) >= limit:
+            break
+    return {
+        "project": project,
+        "cwd": cwd,
+        "profile": settings.get("profile", ""),
+        "helper_enabled": bool(settings.get("helper_enabled")),
+        "helper_model": settings.get("helper_model", ""),
+        "vault_path": settings.get("vault_path", ""),
+        "memory_log_path": settings.get("memory_log_path", ""),
+        "canon": canon,
+        "setup_events": setup_events,
+    }
+
+
+def start_session(
+    *,
+    project: str = "",
+    cwd: str = "",
+    query: str = "",
+    file_paths: list[str] | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
+    settings = load_settings()
+    events = read_jsonl_events(settings["memory_log_path"])
+    supersession_map = _supersession_map(events)
+    scoped = [
+        event
+        for event in events
+        if _event_scope_match(event, project=project, cwd=cwd) and not _is_superseded(event, supersession_map)
+    ]
+    recent = list(reversed(scoped[-limit:]))
+    last_summary = next(
+        (event for event in reversed(scoped) if str(event.get("kind", "")) in {"task_summary", "daily_checkout", "daily_checkin", "failed_attempt", "fix"}),
+        None,
+    )
+    open_loops = [item for item in _collect_open_loops(events, project=project, cwd=cwd) if item.get("status") in ACTIVE_LOOP_STATUSES][:limit]
+    decisions: list[dict[str, Any]] = []
+    for event in reversed(scoped):
+        if str(event.get("kind", "")) not in {"decision", "preference", "project_fact"}:
+            continue
+        decisions.append(
+            {
+                "event_id": event.get("id", ""),
+                "kind": event.get("kind", ""),
+                "timestamp": event.get("timestamp", ""),
+                "text": event.get("text", ""),
+            }
+        )
+        if len(decisions) >= limit:
+            break
+    unfinished = []
+    for event in recent:
+        next_step = _first_structured_item(event, "next_step")
+        risk = _first_structured_item(event, "risk")
+        if next_step or risk:
+            unfinished.append(
+                {
+                    "event_id": event.get("id", ""),
+                    "timestamp": event.get("timestamp", ""),
+                    "next_step": next_step,
+                    "risk": risk,
+                }
+            )
+    return {
+        "project": project,
+        "cwd": cwd,
+        "query": query,
+        "project_canon": get_project_canon(project=project, cwd=cwd, limit=limit),
+        "recent_events": recent,
+        "last_summary": last_summary or {},
+        "open_loops": open_loops,
+        "active_decisions": decisions,
+        "unfinished_threads": unfinished[:limit],
+        "task_context": get_task_context(query or project or cwd or "recent work", project=project, cwd=cwd, file_paths=file_paths or [], limit=limit),
+        "execution_hints": get_execution_hints(project=project, cwd=cwd, limit=limit),
+        "timeline": get_timeline(project=project, cwd=cwd, days=3, limit=limit),
+        "brain_health": {
+            "raw_event_count": len(events),
+            "helper_enabled": bool(settings.get("helper_enabled")),
+            "helper_model": settings.get("helper_model", ""),
+        },
     }
 
 
@@ -1358,6 +2307,7 @@ def persist_event(event: dict[str, Any]) -> dict[str, Any]:
     extracted = {"entities": [], "relations": [], "summary": ""}
     structured_result = {"attempted": False, "stored": False}
     vault_result = {"auto_writes": [], "review_items": []}
+    auto_open_loop_result: dict[str, Any] | None = None
     neo_ready = bool(settings["neo4j_uri"] and settings["neo4j_user"] and settings["neo4j_password"])
     wants_graph = should_store_in_graph(normalized)
     wants_extract = normalized.get("kind") in EXTRACT_KINDS or normalized.get("importance") == "high"
@@ -1388,6 +2338,10 @@ def persist_event(event: dict[str, Any]) -> dict[str, Any]:
             # JSONL already committed; graph auth or connectivity can be fixed without losing the event.
             LOGGER.warning("Graph persistence skipped after JSONL write for event_id=%s: %s", normalized["id"], exc)
 
+    auto_loop_payload = _auto_open_loop_payload(normalized)
+    if auto_loop_payload is not None:
+        auto_open_loop_result = persist_event(auto_loop_payload)
+
     return {
         "ok": True,
         "deduplicated": False,
@@ -1398,6 +2352,12 @@ def persist_event(event: dict[str, Any]) -> dict[str, Any]:
         "vault_auto_writes": len(vault_result.get("auto_writes", [])),
         "vault_review_items": len(vault_result.get("review_items", [])),
         "stored_in_postgres": structured_result.get("stored", False),
+        "auto_open_loop_created": bool(auto_open_loop_result and not auto_open_loop_result.get("deduplicated", False)),
+        "auto_open_loop_event_id": (
+            str((auto_open_loop_result or {}).get("event", {}).get("id", ""))
+            if auto_open_loop_result
+            else ""
+        ),
         "dedupe_explain": {
             "similarity": round(duplicate_similarity, 4),
             "threshold": dedupe_threshold,
@@ -1409,4 +2369,5 @@ def persist_event(event: dict[str, Any]) -> dict[str, Any]:
             "matched_source": normalized.get("source", ""),
         },
         "event": normalized,
+        "auto_open_loop": auto_open_loop_result or {},
     }

@@ -10,6 +10,7 @@ Operator runbook: `../docs/memory-operator-playbook.md`
 - Optional structured/index state in Postgres
 - Optional graph projection in Neo4j
 - Optional local extraction/compression with the Gemma librarian via Ollama
+- Structured agent memory fields when provided: goal, changes, decisions, validation, next step, risks, repo branch/commit, commands, tests, and touched files
 
 Default model policy:
 - MCP + local Ollama/Gemma is the default low-cost path
@@ -144,7 +145,7 @@ memory_gateway/install-cursor-global.sh
 
 This installs:
 - `~/.cursor/mcp.json` entry: `ai-memory-brain`
-- `~/.cursor/hooks.json` stop hook that posts session summaries
+- `~/.cursor/hooks.json` stop hook that posts structured session summaries with branch/commit context
 
 ## Quick verify
 ```bash
@@ -177,6 +178,14 @@ Brain doctor output includes:
 - `checks`: runtime availability checks (gateway, launchctl, postgres, ollama, vault bridge)
 - `drift_checks`: profile/config drift checks with per-check remediation guidance
 - `dedupe`: active dedupe policy parameters
+
+Wrapper/capture behavior:
+- CLI wrappers now capture task start and completion with branch, commit SHA, and executed command
+- CLI wrappers now also capture the current `git diff --name-only` file set when available
+- Cursor stop hook writes task-summary-shaped session memory with validation and TODO fields
+- `post_event.py` can emit structured memory directly through flags instead of only raw `--text`
+- structured summaries with `next_step` or `risk` automatically create an open loop for later resume
+- wrapper non-zero exits are stored as `failed_attempt` so negative memory is explicit
 
 Dedupe tuning knobs:
 - `MEMORY_DEDUPE_WINDOW_MINUTES` (default `30`)

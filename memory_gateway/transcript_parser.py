@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -14,7 +15,7 @@ def parse_transcript(path: str) -> dict[str, Any]:
     """
     p = Path(path)
     if not p.exists():
-        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0}
+        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0, "assistant_texts": [], "open_items": []}
 
     turns: list[dict[str, Any]] = []
     try:
@@ -28,10 +29,10 @@ def parse_transcript(path: str) -> dict[str, Any]:
                 except json.JSONDecodeError:
                     continue
     except OSError:
-        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0}
+        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0, "assistant_texts": [], "open_items": []}
 
     if not turns:
-        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0}
+        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0, "assistant_texts": [], "open_items": []}
 
     # First user message → goal
     goal = ""
@@ -71,24 +72,70 @@ def parse_transcript(path: str) -> dict[str, Any]:
 
     conclusion = " ".join(assistant_texts[-2:]) if assistant_texts else ""
 
+    open_items: list[str] = []
+    open_markers = ("todo", "next", "follow-up", "follow up", "remaining", "risk", "blocked")
+    for text in assistant_texts[-4:]:
+        lowered = text.lower()
+        if any(marker in lowered for marker in open_markers):
+            cleaned = re.sub(r"\s+", " ", text).strip()
+            if cleaned and cleaned not in open_items:
+                open_items.append(cleaned[:240])
+
     return {
         "goal": goal,
         "conclusion": conclusion,
         "tools": seen_tools,
         "turn_count": len(turns),
+        "assistant_texts": assistant_texts[-6:],
+        "open_items": open_items,
     }
 
 
 def build_rule_based_summary(parsed: dict[str, Any]) -> str:
-    """Build a plain-text summary from parsed transcript fields."""
-    parts: list[str] = []
-    if parsed.get("goal"):
-        parts.append(f"Goal: {parsed['goal']}")
-    if parsed.get("conclusion"):
-        parts.append(f"Concluded: {parsed['conclusion']}")
-    if parsed.get("tools"):
-        parts.append(f"Tools: {', '.join(parsed['tools'])}")
-    turn_count = parsed.get("turn_count", 0)
-    if turn_count:
-        parts.append(f"Turns: {turn_count}")
-    return "\n".join(parts) if parts else "Session completed."
+    """Build a task_summary-shaped text from parsed transcript fields."""
+    goal = str(parsed.get("goal", "")).strip()
+    conclusion = str(parsed.get("conclusion", "")).strip()
+    tools = parsed.get("tools", [])
+    turn_count = int(parsed.get("turn_count", 0) or 0)
+    open_items = parsed.get("open_items", [])
+    changes = conclusion or "Completed agent session work."
+    decisions = f"Used tools: {', '.join(tools)}" if tools else "Used local transcript fallback summarization."
+    validation = f"Cursor session completed with {turn_count} turns." if turn_count else "Cursor session completed."
+    risks = "; ".join(open_items[:3]) if open_items else "Review transcript if unresolved follow-ups remain."
+    parts = []
+    if goal:
+        parts.append(f"Goal: {goal}")
+    parts.append(f"Changes: {changes}")
+    parts.append(f"Decisions: {decisions}")
+    parts.append(f"Validation: {validation}")
+    parts.append(f"Risks/TODO: {risks}")
+    return "\n".join(parts)
+
+
+def build_structured_session_memory(parsed: dict[str, Any], *, summary_text: str = "") -> dict[str, Any]:
+    goal = str(parsed.get("goal", "")).strip()
+    conclusion = str(parsed.get("conclusion", "")).strip()
+    tools = parsed.get("tools", [])
+    turn_count = int(parsed.get("turn_count", 0) or 0)
+    open_items = parsed.get("open_items", [])
+    changes = str(summary_text or conclusion or "Completed agent session work.").strip()
+    decisions = f"Used tools: {', '.join(tools)}" if tools else "No explicit tool calls captured."
+    validation = f"Cursor session completed with {turn_count} turns." if turn_count else "Cursor session completed."
+    risk = "; ".join(open_items[:3]) if open_items else "Review transcript if unresolved follow-ups remain."
+    return {
+        "goal": goal,
+        "changes": changes,
+        "decision": decisions,
+        "validation": validation,
+        "next_step": open_items[0] if open_items else "",
+        "risk": risk,
+        "summary": build_rule_based_summary(
+            {
+                "goal": goal,
+                "conclusion": changes,
+                "tools": tools,
+                "turn_count": turn_count,
+                "open_items": open_items,
+            }
+        ),
+    }

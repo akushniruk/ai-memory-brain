@@ -7,7 +7,16 @@ CONFIG_DIR="$HOME/.config/ai-memory-brain"
 CONFIG_PATH="$CONFIG_DIR/config.env"
 MARKER="AI_MEMORY_BRAIN_WRAPPER"
 APP_HOME="${AI_MEMORY_BRAIN_HOME:-$HOME/Library/Application Support/ai-memory-brain}"
-PROFILE="${AI_MEMORY_INSTALL_PROFILE:-simple}"
+PROFILE="${AI_MEMORY_INSTALL_PROFILE:-}"
+APP_HOME_CONFIG="$APP_HOME/config/memory.env"
+
+if [ -z "$PROFILE" ] && [ -f "$APP_HOME_CONFIG" ]; then
+  PROFILE="$(grep '^AI_MEMORY_INSTALL_PROFILE=' "$APP_HOME_CONFIG" 2>/dev/null | sed 's/^[^=]*="//; s/"$//')"
+fi
+
+if [ -z "$PROFILE" ]; then
+  PROFILE="simple"
+fi
 
 mkdir -p "$BIN_DIR" "$CONFIG_DIR"
 mkdir -p "$APP_HOME/memory/logs" "$APP_HOME/config" "$APP_HOME/vault"
@@ -107,6 +116,10 @@ PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 PROJECT_NAME="$(basename "$PROJECT_ROOT")"
 CURRENT_CWD="$(pwd)"
 PROMPT_TEXT="${*:-interactive}"
+CURRENT_BRANCH="$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+CURRENT_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+CHANGED_FILES="$(git -C "$PROJECT_ROOT" diff --name-only HEAD 2>/dev/null | paste -sd, - || true)"
+COMMAND_LINE="$TOOL_NAME ${*:-interactive}"
 
 "$PYTHON_TO_USE" "$POSTER" \
   --source "$TOOL_NAME-cli" \
@@ -115,6 +128,10 @@ PROMPT_TEXT="${*:-interactive}"
   --project "$PROJECT_NAME" \
   --cwd "$CURRENT_CWD" \
   --importance normal \
+  --branch "$CURRENT_BRANCH" \
+  --commit-sha "$CURRENT_COMMIT" \
+  --files-touched "$CHANGED_FILES" \
+  --commands-run "$COMMAND_LINE" \
   --tags "$TOOL_NAME,session" >/dev/null 2>&1 || true
 
 set +e
@@ -122,13 +139,37 @@ set +e
 EXIT_CODE=$?
 set -e
 
+RESULT_KIND="task_summary"
+RISK_TEXT=""
+CHANGES_TEXT="$TOOL_NAME finished with exit code $EXIT_CODE."
+VALIDATION_TEXT="CLI process exited with code $EXIT_CODE."
+DECISION_TEXT="Capture wrapper-level session summary for later recall."
+NEXT_STEP_TEXT=""
+
+if [ "$EXIT_CODE" -ne 0 ]; then
+  RESULT_KIND="failed_attempt"
+  CHANGES_TEXT="$TOOL_NAME failed with exit code $EXIT_CODE."
+  DECISION_TEXT="Treat non-zero wrapper exits as negative memory so future sessions can avoid repeating the same failed attempt blindly."
+  RISK_TEXT="Inspect terminal output for failure details."
+  NEXT_STEP_TEXT="Review the failing command output and adjust the next attempt."
+fi
+
 "$PYTHON_TO_USE" "$POSTER" \
   --source "$TOOL_NAME-cli" \
-  --kind task_summary \
-  --text "$TOOL_NAME finished: $PROMPT_TEXT" \
+  --kind "$RESULT_KIND" \
   --project "$PROJECT_NAME" \
   --cwd "$CURRENT_CWD" \
   --importance high \
+  --branch "$CURRENT_BRANCH" \
+  --commit-sha "$CURRENT_COMMIT" \
+  --files-touched "$CHANGED_FILES" \
+  --commands-run "$COMMAND_LINE" \
+  --goal "$PROMPT_TEXT" \
+  --changes "$CHANGES_TEXT" \
+  --decision "$DECISION_TEXT" \
+  --validation "$VALIDATION_TEXT" \
+  --next-step "$NEXT_STEP_TEXT" \
+  --risk "$RISK_TEXT" \
   --tags "$TOOL_NAME,session" >/dev/null 2>&1 || true
 
 exit "$EXIT_CODE"

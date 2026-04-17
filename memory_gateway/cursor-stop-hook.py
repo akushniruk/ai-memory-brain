@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -41,7 +42,7 @@ def _parse_transcript_local(transcript_path: str) -> dict:
     """Minimal rule-based parser used when /summarize is unreachable."""
     p = Path(transcript_path)
     if not p.exists():
-        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0}
+        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0, "open_items": []}
     turns = []
     try:
         with p.open("r", encoding="utf-8") as f:
@@ -53,7 +54,7 @@ def _parse_transcript_local(transcript_path: str) -> dict:
                     except json.JSONDecodeError:
                         continue
     except OSError:
-        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0}
+        return {"goal": "", "conclusion": "", "tools": [], "turn_count": 0, "open_items": []}
 
     goal = ""
     for turn in turns:
@@ -89,20 +90,49 @@ def _parse_transcript_local(transcript_path: str) -> dict:
                     tools.append(name)
 
     conclusion = " ".join(assistant_texts[-2:]) if assistant_texts else ""
-    return {"goal": goal, "conclusion": conclusion, "tools": tools, "turn_count": len(turns)}
+    open_items = []
+    for text in assistant_texts[-4:]:
+        lowered = text.lower()
+        if any(marker in lowered for marker in ("todo", "next", "follow-up", "follow up", "remaining", "risk", "blocked")):
+            open_items.append(text[:240])
+    return {"goal": goal, "conclusion": conclusion, "tools": tools, "turn_count": len(turns), "open_items": open_items}
 
 
 def _build_rule_based_summary(parsed: dict) -> str:
+    goal = str(parsed.get("goal", "")).strip()
+    conclusion = str(parsed.get("conclusion", "")).strip() or "Completed agent session work."
+    tools = parsed.get("tools", [])
+    turn_count = int(parsed.get("turn_count", 0) or 0)
+    open_items = parsed.get("open_items", [])
     parts = []
-    if parsed.get("goal"):
-        parts.append(f"Goal: {parsed['goal']}")
-    if parsed.get("conclusion"):
-        parts.append(f"Concluded: {parsed['conclusion']}")
-    if parsed.get("tools"):
-        parts.append(f"Tools: {', '.join(parsed['tools'])}")
-    if parsed.get("turn_count"):
-        parts.append(f"Turns: {parsed['turn_count']}")
-    return "\n".join(parts) if parts else "Session completed."
+    if goal:
+        parts.append(f"Goal: {goal}")
+    parts.append(f"Changes: {conclusion}")
+    parts.append(f"Decisions: Used tools: {', '.join(tools)}" if tools else "Decisions: Used local transcript fallback summarization.")
+    parts.append(f"Validation: Cursor session completed with {turn_count} turns." if turn_count else "Validation: Cursor session completed.")
+    parts.append(f"Risks/TODO: {'; '.join(open_items[:3])}" if open_items else "Risks/TODO: Review transcript if unresolved follow-ups remain.")
+    return "\n".join(parts)
+
+
+def _git_value(cwd: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def _git_changed_files(cwd: Path) -> list[str]:
+    raw = _git_value(cwd, "diff", "--name-only", "HEAD")
+    if not raw:
+        return []
+    return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
 def main() -> int:
@@ -134,6 +164,7 @@ def main() -> int:
     summary = ""
     used_llm = False
     turn_count = 0
+    structured: dict[str, object] = {}
 
     if transcript_path:
         try:
@@ -145,13 +176,37 @@ def main() -> int:
             summary = result.get("summary", "")
             used_llm = bool(result.get("used_llm", False))
             turn_count = int(result.get("turn_count", 0))
+            structured = dict(result.get("structured") or {})
         except (urllib.error.URLError, TimeoutError, OSError):
             parsed = _parse_transcript_local(transcript_path)
             summary = _build_rule_based_summary(parsed)
             turn_count = parsed.get("turn_count", 0)
+            structured = {
+                "goal": parsed.get("goal", ""),
+                "changes": parsed.get("conclusion", ""),
+                "decision": f"Used tools: {', '.join(parsed.get('tools', []))}" if parsed.get("tools") else "",
+                "validation": f"Cursor session completed with {turn_count} turns." if turn_count else "Cursor session completed.",
+                "next_step": (parsed.get("open_items", []) or [""])[0],
+                "risk": "; ".join(parsed.get("open_items", [])[:3]) if parsed.get("open_items") else "",
+                "summary": summary,
+            }
 
     if not summary:
         summary = f"Cursor agent session completed ({cwd.name})."
+    if not structured:
+        structured = {
+            "goal": "",
+            "changes": summary,
+            "decision": "",
+            "validation": "Cursor session completed.",
+            "next_step": "",
+            "risk": "",
+            "summary": summary,
+        }
+
+    branch = _git_value(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    commit_sha = _git_value(cwd, "rev-parse", "HEAD")
+    changed_files = _git_changed_files(cwd)
 
     payload = {
         "source": "cursor-stop-hook",
@@ -168,6 +223,17 @@ def main() -> int:
             "transcript_path": transcript_path,
             "used_llm": used_llm,
             "turn_count": turn_count,
+            "branch": branch,
+            "repo_context": {
+                "branch": branch,
+                "commit_sha": commit_sha,
+                "files_touched": changed_files,
+            },
+            "structured": {
+                key: value
+                for key, value in structured.items()
+                if value not in ("", [], {}, None)
+            },
         },
     }
 

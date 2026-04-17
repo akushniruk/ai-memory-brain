@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from transcript_parser import parse_transcript, build_rule_based_summary
+from transcript_parser import build_rule_based_summary, build_structured_session_memory, parse_transcript
 
 
 TRANSCRIPT_LINES = [
@@ -79,6 +79,7 @@ class TranscriptParserTests(unittest.TestCase):
         self.assertEqual(result["conclusion"], "")
         self.assertEqual(result["tools"], [])
         self.assertEqual(result["turn_count"], 0)
+        self.assertEqual(result["open_items"], [])
 
     def test_parse_empty_transcript_returns_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -118,11 +119,28 @@ class TranscriptParserTests(unittest.TestCase):
             "conclusion": "Added handler",
             "tools": ["Read", "Edit"],
             "turn_count": 2,
+            "open_items": ["Check deploy logs"],
         }
         summary = build_rule_based_summary(parsed)
         self.assertIn("Fix routing", summary)
         self.assertIn("Added handler", summary)
         self.assertIn("Read", summary)
+        self.assertIn("Validation:", summary)
+        self.assertIn("Risks/TODO:", summary)
+
+    def test_build_structured_session_memory(self) -> None:
+        parsed = {
+            "goal": "Fix routing",
+            "conclusion": "Added handler",
+            "tools": ["Read", "Edit"],
+            "turn_count": 2,
+            "open_items": ["Check deploy logs"],
+        }
+        structured = build_structured_session_memory(parsed)
+        self.assertEqual(structured["goal"], "Fix routing")
+        self.assertIn("Added handler", structured["changes"])
+        self.assertIn("Read", structured["decision"])
+        self.assertEqual(structured["next_step"], "Check deploy logs")
 
 
 if __name__ == "__main__":

@@ -76,6 +76,21 @@ class McpServerTests(unittest.TestCase):
                     "memory_add",
                     "memory_store_summary",
                     "memory_meeting_summary",
+                    "memory_store_structured",
+                    "memory_store_failed_attempt",
+                    "memory_open_loop_add",
+                    "memory_open_loop_update",
+                    "memory_open_loops",
+                    "memory_promote_canon",
+                    "memory_mark_superseded",
+                    "memory_start_session",
+                    "memory_task_context",
+                    "memory_project_canon",
+                    "memory_machine_context",
+                    "memory_execution_hints",
+                    "memory_timeline",
+                    "memory_quality_report",
+                    "memory_cleanup_candidates",
                     "memory_get_date",
                     "memory_entity_context",
                     "memory_daily_summary",
@@ -249,6 +264,115 @@ class McpServerTests(unittest.TestCase):
             meta_payload = json.loads(meeting_with_metadata["result"]["content"][0]["text"])
             self.assertEqual(meta_payload["event"]["timestamp"], "2026-04-05T16:00:00+00:00")
             self.assertEqual(meta_payload["event"]["metadata"]["branch"], "feature/review-flow")
+            self.assertEqual(meta_payload["event"]["metadata"]["repo_context"]["branch"], "feature/review-flow")
+
+            structured = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 521,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_store_structured",
+                        "arguments": {
+                            "kind": "task_summary",
+                            "project": "pharos",
+                            "goal": "Ship session bootstrap",
+                            "changes": "Added open loops and execution hints",
+                            "decision": "Keep JSONL canonical",
+                            "validation": "mcp tests passed",
+                            "next_step": "exercise on next session",
+                            "risk": "watch ranking noise",
+                            "branch": "feature/bootstrap",
+                            "commit_sha": "deadbeef",
+                            "files_touched": ["memory_gateway/memory_store.py"],
+                            "commands_run": ["python -m unittest memory_librarian/test_mcp_server.py"],
+                            "tests": ["memory_librarian/test_mcp_server.py"],
+                        },
+                    },
+                },
+            )
+            self.assertFalse(structured["result"].get("isError", False))
+            structured_payload = json.loads(structured["result"]["content"][0]["text"])
+            self.assertEqual(structured_payload["event"]["metadata"]["repo_context"]["commit_sha"], "deadbeef")
+
+            failed_attempt = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 5211,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_store_failed_attempt",
+                        "arguments": {
+                            "project": "pharos",
+                            "goal": "Run wrapper failure path",
+                            "changes": "wrapper exited with code 1",
+                            "validation": "non-zero exit observed",
+                            "next_step": "inspect output before retrying",
+                            "risk": "repeating blindly wastes time",
+                        },
+                    },
+                },
+            )
+            self.assertFalse(failed_attempt["result"].get("isError", False))
+            failed_payload = json.loads(failed_attempt["result"]["content"][0]["text"])
+            self.assertEqual(failed_payload["event"]["kind"], "failed_attempt")
+            self.assertTrue(failed_payload["auto_open_loop_created"])
+
+            open_loop = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 522,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_open_loop_add",
+                        "arguments": {
+                            "title": "Fix retrieval drift",
+                            "project": "pharos",
+                            "note": "ranking still noisy around file overlap",
+                            "next_step": "compare results against recent session",
+                            "files_touched": ["memory_gateway/memory_store.py"],
+                        },
+                    },
+                },
+            )
+            self.assertFalse(open_loop["result"].get("isError", False))
+            loop_payload = json.loads(open_loop["result"]["content"][0]["text"])
+            loop_id = loop_payload["event"]["metadata"]["loop_id"]
+
+            update_loop = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 523,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_open_loop_update",
+                        "arguments": {
+                            "loop_id": loop_id,
+                            "project": "pharos",
+                            "status": "blocked",
+                            "note": "need more live examples",
+                        },
+                    },
+                },
+            )
+            self.assertFalse(update_loop["result"].get("isError", False))
+
+            loop_list = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 524,
+                    "method": "tools/call",
+                    "params": {"name": "memory_open_loops", "arguments": {"project": "pharos", "limit": 5}},
+                },
+            )
+            loop_list_payload = json.loads(loop_list["result"]["content"][0]["text"])
+            self.assertTrue(loop_list_payload["items"])
+            self.assertEqual(loop_list_payload["items"][0]["status"], "blocked")
 
             missing_text = _rpc(
                 proc,
@@ -467,6 +591,147 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("match_type", first_context["retrieval"])
             self.assertIn("score_breakdown", first_context["retrieval"])
 
+            start_session = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 113,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_start_session",
+                        "arguments": {"project": "pharos", "query": "bootstrap", "file_paths": ["memory_gateway/memory_store.py"]},
+                    },
+                },
+            )
+            start_payload = json.loads(start_session["result"]["content"][0]["text"])
+            self.assertIn("open_loops", start_payload)
+            self.assertIn("execution_hints", start_payload)
+            self.assertIn("task_context", start_payload)
+
+            task_context = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 114,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_task_context",
+                        "arguments": {"query": "retrieval drift", "project": "pharos", "file_paths": ["memory_gateway/memory_store.py"]},
+                    },
+                },
+            )
+            task_payload = json.loads(task_context["result"]["content"][0]["text"])
+            self.assertIn("results", task_payload)
+
+            canon = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 115,
+                    "method": "tools/call",
+                    "params": {"name": "memory_project_canon", "arguments": {"project": "pharos"}},
+                },
+            )
+            canon_payload = json.loads(canon["result"]["content"][0]["text"])
+            self.assertIn("items", canon_payload)
+
+            hints = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 116,
+                    "method": "tools/call",
+                    "params": {"name": "memory_execution_hints", "arguments": {"project": "pharos"}},
+                },
+            )
+            hints_payload = json.loads(hints["result"]["content"][0]["text"])
+            self.assertIn("commands", hints_payload)
+
+            timeline = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 117,
+                    "method": "tools/call",
+                    "params": {"name": "memory_timeline", "arguments": {"project": "pharos", "days": 30}},
+                },
+            )
+            timeline_payload = json.loads(timeline["result"]["content"][0]["text"])
+            self.assertIn("days", timeline_payload)
+
+            quality = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 118,
+                    "method": "tools/call",
+                    "params": {"name": "memory_quality_report", "arguments": {"project": "pharos"}},
+                },
+            )
+            quality_payload = json.loads(quality["result"]["content"][0]["text"])
+            self.assertIn("issue_count", quality_payload)
+            self.assertIn("explainability", quality_payload)
+
+            canon_source_event_id = structured_payload["event"]["id"]
+            promote = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 119,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_promote_canon",
+                        "arguments": {"event_id": canon_source_event_id, "project": "pharos", "title": "Pharos bootstrap canon"},
+                    },
+                },
+            )
+            promote_payload = json.loads(promote["result"]["content"][0]["text"])
+            self.assertTrue(promote_payload["ok"])
+
+            supersede = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 120,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "memory_mark_superseded",
+                        "arguments": {
+                            "old_event_id": failed_payload["event"]["id"],
+                            "new_event_id": canon_source_event_id,
+                            "project": "pharos",
+                            "reason": "newer setup memory supersedes older one",
+                        },
+                    },
+                },
+            )
+            supersede_payload = json.loads(supersede["result"]["content"][0]["text"])
+            self.assertTrue(supersede_payload["ok"])
+
+            machine = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 121,
+                    "method": "tools/call",
+                    "params": {"name": "memory_machine_context", "arguments": {"project": "pharos"}},
+                },
+            )
+            machine_payload = json.loads(machine["result"]["content"][0]["text"])
+            self.assertIn("canon", machine_payload)
+
+            cleanup = _rpc(
+                proc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 122,
+                    "method": "tools/call",
+                    "params": {"name": "memory_cleanup_candidates", "arguments": {"project": "pharos"}},
+                },
+            )
+            cleanup_payload = json.loads(cleanup["result"]["content"][0]["text"])
+            self.assertIn("items", cleanup_payload)
+
             doctor = _rpc(
                 proc,
                 {
@@ -521,6 +786,7 @@ class McpServerTests(unittest.TestCase):
                 ("memory_brain_health", {"limit": 5}),
                 ("memory_brain_doctor", {}),
                 ("memory_entity_hygiene", {}),
+                ("memory_quality_report", {"project": "pharos"}),
             ):
                 full_resp = _rpc(
                     proc,

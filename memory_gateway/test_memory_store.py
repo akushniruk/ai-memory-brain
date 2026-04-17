@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -15,12 +16,23 @@ from memory_store import (
     _normalize_extracted_payload,
     _project_key,
     append_jsonl,
+    get_cleanup_candidates,
+    get_execution_hints,
+    get_machine_context,
+    get_memory_quality_report,
+    get_open_loops,
     get_review_queue,
+    get_task_context,
+    get_timeline,
     get_vault_status,
+    mark_memory_superseded,
     persist_event,
+    promote_memory_to_canon,
     reject_review_queue_item,
     load_settings,
     normalize_event,
+    start_session,
+    store_structured_memory,
     should_store_in_graph,
 )
 from memory_store import get_events_by_date, get_project_context, get_recent_events, search_events
@@ -1012,6 +1024,291 @@ class MemoryStoreTests(unittest.TestCase):
                     os.environ.pop("MEMORY_HELPER_MODEL", None)
                 else:
                     os.environ["MEMORY_HELPER_MODEL"] = old_helper_model
+
+    def test_store_structured_memory_and_session_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            old_helper_enabled = os.environ.get("MEMORY_HELPER_ENABLED")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            os.environ["MEMORY_HELPER_ENABLED"] = "0"
+            try:
+                result = store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    importance="high",
+                    tags=["bootstrap"],
+                    graph=True,
+                    goal="Ship agent session bootstrap",
+                    changes="Added session bootstrap and repo-aware retrieval",
+                    decision="Keep JSONL canonical",
+                    validation="unit tests passed",
+                    next_step="exercise on the next live repo session",
+                    risk="watch for noisy ranking",
+                    repo_context={
+                        "branch": "feature/bootstrap",
+                        "commit_sha": "abc123",
+                        "files_touched": ["memory_gateway/memory_store.py"],
+                        "commands_run": ["python -m unittest memory_gateway/test_memory_store.py"],
+                        "tests": ["memory_gateway/test_memory_store.py"],
+                    },
+                )
+                self.assertTrue(result["ok"])
+                session = start_session(project="ai-memory-brain", cwd="/tmp/project", query="bootstrap", file_paths=["memory_gateway/memory_store.py"])
+                self.assertTrue(session["recent_events"])
+                self.assertEqual(session["recent_events"][0]["metadata"]["repo_context"]["branch"], "feature/bootstrap")
+                self.assertTrue(session["execution_hints"]["commands"])
+                self.assertTrue(session["task_context"]["results"])
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+                if old_helper_enabled is None:
+                    os.environ.pop("MEMORY_HELPER_ENABLED", None)
+                else:
+                    os.environ["MEMORY_HELPER_ENABLED"] = old_helper_enabled
+
+    def test_open_loop_lifecycle_and_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            try:
+                created = store_structured_memory(
+                    kind="open_loop",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    importance="high",
+                    goal="Fix recall ranking drift",
+                    next_step="compare ranking before/after token changes",
+                    risk="could hide older important events",
+                    title="Recall ranking drift",
+                    status="open",
+                    metadata={"loop_id": "loop-1", "title": "Recall ranking drift", "status": "open", "next_step": "compare ranking before/after token changes"},
+                )
+                self.assertTrue(created["ok"])
+                updated = store_structured_memory(
+                    kind="open_loop_update",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    importance="normal",
+                    summary="resolved after tuning file overlap weights",
+                    next_step="",
+                    title="Recall ranking drift",
+                    status="resolved",
+                    metadata={"loop_id": "loop-1", "title": "Recall ranking drift", "status": "resolved"},
+                )
+                self.assertTrue(updated["ok"])
+                all_loops = get_open_loops(project="ai-memory-brain", cwd="/tmp/project", limit=5)
+                self.assertEqual(all_loops["items"][0]["status"], "resolved")
+                report = get_memory_quality_report(project="ai-memory-brain", cwd="/tmp/project", limit=20)
+                self.assertIn("issue_count", report)
+                timeline = get_timeline(project="ai-memory-brain", cwd="/tmp/project", days=30, limit=10)
+                self.assertTrue(timeline["days"])
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+
+    def test_task_context_prefers_file_overlap_and_negative_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            try:
+                store_structured_memory(
+                    kind="failed_attempt",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    importance="high",
+                    summary="initial fix regressed compact payload shape",
+                    validation="tests failed locally",
+                    risk="do not reuse the old compact serializer path",
+                    repo_context={"files_touched": ["memory_librarian/handlers.py"]},
+                )
+                store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    importance="normal",
+                    summary="updated handler flow for task context",
+                    validation="tests passed",
+                    repo_context={
+                        "files_touched": ["memory_librarian/handlers.py"],
+                        "commands_run": ["python -m unittest memory_librarian/test_mcp_server.py"],
+                        "tests": ["memory_librarian/test_mcp_server.py"],
+                    },
+                )
+                context = get_task_context(
+                    "handler task context",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    file_paths=["memory_librarian/handlers.py"],
+                    limit=5,
+                )
+                self.assertTrue(context["results"])
+                self.assertTrue(context["negative_memories"])
+                hints = get_execution_hints(project="ai-memory-brain", cwd="/tmp/project", limit=5)
+                self.assertTrue(hints["commands"])
+                self.assertTrue(hints["warnings"])
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+
+    def test_structured_summary_auto_creates_open_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            try:
+                result = store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    importance="high",
+                    goal="Improve retrieval",
+                    changes="Adjusted task ranking and scoring",
+                    validation="unit tests passed",
+                    next_step="Run against a live repo session",
+                    risk="could still over-rank old memories",
+                )
+                self.assertTrue(result["ok"])
+                self.assertTrue(result["auto_open_loop_created"])
+                loops = get_open_loops(project="ai-memory-brain", cwd="/tmp/project", status="open", limit=5)
+                self.assertEqual(len(loops["items"]), 1)
+                self.assertIn("Run against a live repo session", loops["items"][0]["next_step"])
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+
+    def test_failed_attempt_auto_creates_open_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            try:
+                result = store_structured_memory(
+                    kind="failed_attempt",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    importance="high",
+                    goal="Run failing wrapper path",
+                    changes="Wrapper exited non-zero",
+                    validation="exit code 1 observed",
+                    next_step="Inspect failure output before retrying",
+                    risk="repeating blindly will waste time",
+                )
+                self.assertTrue(result["ok"])
+                self.assertTrue(result["auto_open_loop_created"])
+                loops = get_open_loops(project="ai-memory-brain", cwd="/tmp/project", status="open", limit=5)
+                self.assertEqual(len(loops["items"]), 1)
+                self.assertIn("Inspect failure output", loops["items"][0]["next_step"])
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+
+    def test_task_context_reports_active_diff_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            try:
+                store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    summary="worked on handlers task context path",
+                    repo_context={"files_touched": ["memory_librarian/handlers.py"]},
+                )
+                with patch("memory_store._git_changed_files", return_value=["memory_librarian/handlers.py"]):
+                    context = get_task_context(
+                        "handlers",
+                        project="ai-memory-brain",
+                        cwd="/tmp/project",
+                        limit=5,
+                    )
+                self.assertEqual(context["active_diff_files"], ["memory_librarian/handlers.py"])
+                self.assertTrue(context["results"])
+                self.assertGreater(context["results"][0]["retrieval"]["score_breakdown"]["active_diff_overlap"], 0.0)
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+
+    def test_promote_canon_and_supersede_hides_old_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            try:
+                first = store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    summary="Installed local wrappers and cursor hook",
+                )
+                second = store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    summary="Installed local wrappers and cursor hook with power-user profile",
+                )
+                promoted = promote_memory_to_canon(
+                    event_id=second["event"]["id"],
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    title="Local wrapper setup",
+                )
+                self.assertTrue(promoted["ok"])
+                superseded = mark_memory_superseded(
+                    old_event_id=first["event"]["id"],
+                    new_event_id=second["event"]["id"],
+                    reason="newer rollout replaced older one",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                )
+                self.assertTrue(superseded["ok"])
+                recent = get_recent_events(limit=10, project="ai-memory-brain")
+                recent_ids = {item["id"] for item in recent}
+                self.assertNotIn(first["event"]["id"], recent_ids)
+                machine = get_machine_context(project="ai-memory-brain", cwd="/tmp/project", limit=10)
+                self.assertTrue(machine["canon"]["items"])
+                self.assertTrue(any(item.get("canon") for item in machine["canon"]["items"]))
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
+
+    def test_cleanup_candidates_detect_similar_rollouts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            old_home = os.environ.get("AI_MEMORY_BRAIN_HOME")
+            os.environ["AI_MEMORY_BRAIN_HOME"] = tmp_dir
+            try:
+                store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    summary="Installed codex wrapper and cursor hook locally for agent memory rollout",
+                    metadata={"force_store": True},
+                )
+                store_structured_memory(
+                    kind="task_summary",
+                    project="ai-memory-brain",
+                    cwd="/tmp/project",
+                    summary="Installed codex wrapper and cursor hook locally for agent memory rollout.",
+                    metadata={"force_store": True},
+                )
+                candidates = get_cleanup_candidates(project="ai-memory-brain", cwd="/tmp/project", limit=10)
+                self.assertGreaterEqual(candidates["count"], 1)
+            finally:
+                if old_home is None:
+                    os.environ.pop("AI_MEMORY_BRAIN_HOME", None)
+                else:
+                    os.environ["AI_MEMORY_BRAIN_HOME"] = old_home
 
 
 if __name__ == "__main__":

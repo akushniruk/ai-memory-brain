@@ -40,6 +40,7 @@ Default model policy:
 - `docs/memory-librarian-howto-reference.md`: install/use/schema guide for the MCP server
 - `docs/memory-operator-playbook.md`: practical quality triage, dedupe/retrieval tuning, and repair flows
 - `memory_gateway/`: optional HTTP gateway and CLI helpers for auto-capture
+- Agent-native memory tools for session bootstrap, open loops, structured recall, project canon, execution hints, and memory quality linting
 - Local JSONL memory log
 - Obsidian-compatible vault scaffold stored beside the memory log
 - First vault bridge behavior for safe defaults:
@@ -57,11 +58,16 @@ Default model policy:
 flowchart TD
   U["User"] --> A["Agent: Codex / Cursor / Claude"]
   A --> M["MCP: ai-memory-brain"]
-  M --> O["Ollama helper (optional)"]
-  M --> J["JSONL log"]
-  O --> V["Vault bridge (optional)"]
-  O --> P["Postgres index (optional)"]
-  O --> G["Neo4j graph (optional)"]
+  A --> W["Wrappers / Cursor Hook (optional)"]
+  W --> H["Gateway: /event /summarize"]
+  H --> J["JSONL log (canonical)"]
+  M --> J
+  J --> V["Vault bridge (optional)"]
+  J --> P["Postgres index (optional)"]
+  J --> G["Neo4j graph (optional)"]
+  H --> O["Ollama helper (optional)"]
+  J --> C["Canon + Supersession layer"]
+  J --> L["Open loops + failed attempts"]
 ```
 
 
@@ -73,20 +79,33 @@ sequenceDiagram
   participant U as User
   participant A as Agent
   participant B as AI Memory Brain MCP
+  participant W as Wrapper / Hook
   participant J as JSONL log
   participant G as Neo4j graph
   participant H as Gemma librarian via Ollama
 
   U->>A: Ask about current work or past context
-  A->>B: memory_project_context(project)
+  A->>B: memory_start_session(project, cwd, query)
   B->>J: Read recent memories
+  B->>J: Read canon, open loops, failures
   B->>G: Read project/day graph (optional)
   J-->>B: Raw memory history
   G-->>B: Related graph context
   B-->>A: Working context
   A->>U: Continue the task with context recovered
-  A->>B: memory_store_summary(...) at the end
+  opt CLI wrappers / Cursor hook
+    A->>W: Start / finish session
+    W->>J: Store structured session memory
+  end
+  A->>B: memory_store_structured(...) at the end
   B->>J: Save memory event
+  opt next_step or risk present
+    B->>J: Auto-create open loop
+  end
+  opt cleanup / promotion
+    A->>B: memory_promote_canon(...) or memory_mark_superseded(...)
+    B->>J: Save canon / supersession event
+  end
   opt Vault bridge enabled
     B->>V: Auto-write daily notes or meeting notes
   end
@@ -487,14 +506,43 @@ Good default workflow for agents:
 - During work: `memory_search(...)` or `memory_by_date(...)` as needed
 - End: `memory_store_summary(...)` with goal, changes, decisions, validation, and risks/TODO
 
+Higher-signal workflow for long-running agent sessions:
+
+- Start: `memory_start_session(project, cwd, query, file_paths)`
+- Track unresolved work: `memory_open_loop_add(...)`, `memory_open_loop_update(...)`, `memory_open_loops(...)`
+- During work: `memory_task_context(...)`, `memory_execution_hints(...)`, `memory_project_canon(...)`
+- End: `memory_store_structured(...)` or `memory_store_summary(...)`
+- Audit quality and history: `memory_quality_report(...)`, `memory_timeline(...)`
+
+Current agent niceties:
+- structured summaries with `next_step` or `risk` now auto-create an `open_loop` record unless explicitly disabled
+- `memory_task_context(...)` also boosts memories that overlap with the current repo diff when `cwd` is provided
+- wrapper non-zero exits now store `failed_attempt` memory instead of only generic summaries
+- canon promotion and supersession let you keep one stable setup fact while hiding stale rollout memories from normal retrieval
+
 ## Core tools
 
 - `memory_add`
 - `memory_store_summary`
+- `memory_store_structured`
+- `memory_store_failed_attempt`
+- `memory_open_loop_add`
+- `memory_open_loop_update`
+- `memory_open_loops`
+- `memory_promote_canon`
+- `memory_mark_superseded`
 - `memory_search`
 - `memory_recent`
 - `memory_by_date` / `memory_get_date`
 - `memory_project_context`
+- `memory_start_session`
+- `memory_task_context`
+- `memory_project_canon`
+- `memory_machine_context`
+- `memory_execution_hints`
+- `memory_timeline`
+- `memory_quality_report`
+- `memory_cleanup_candidates`
 - `memory_daily_summary`
 - `memory_today_summary`
 - `memory_entity_context`

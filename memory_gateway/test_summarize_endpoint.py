@@ -100,6 +100,8 @@ class SummarizeEndpointTests(unittest.TestCase):
         })
         self.assertIn("used_llm", result)
         self.assertIsInstance(result["used_llm"], bool)
+        self.assertIn("structured", result)
+        self.assertIsInstance(result["structured"], dict)
 
     def test_summarize_missing_transcript_returns_fallback(self) -> None:
         result = self._post("/summarize", {
@@ -119,6 +121,8 @@ class SummarizeEndpointTests(unittest.TestCase):
         })
         self.assertIn("summary", result)
         self.assertIn("Add /summarize endpoint", result["summary"])
+        self.assertIn("Goal", result["summary"])
+        self.assertIn("validation", {k.lower() for k in result["structured"].keys()})
 
     def test_summarize_unknown_path_returns_404(self) -> None:
         from urllib.error import HTTPError

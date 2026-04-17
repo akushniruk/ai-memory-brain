@@ -9,7 +9,11 @@ This guide explains what the Memory Librarian MCP server is, how to install it, 
 It serves tools for:
 
 - writing memory events (`memory_add`, `memory_store_summary`, `memory_meeting_summary`)
+- writing structured agent memory (`memory_store_structured`, open-loop tools)
+- writing explicit negative memory (`memory_store_failed_attempt`)
 - reading memory (`memory_recent`, `memory_search`, `memory_by_date`, `memory_project_context`)
+- bootstrapping agent context (`memory_start_session`, `memory_task_context`, `memory_execution_hints`, `memory_project_canon`)
+- auditing memory quality and time (`memory_quality_report`, `memory_timeline`)
 - graph and health views (`memory_graph_overview`, `memory_today_graph`, `memory_brain_health`)
 - vault and Postgres bridge operations (`memory_vault_status`, `memory_postgres_recent`, review queue tools)
 
@@ -77,12 +81,20 @@ memory_gateway/install-cursor-global.sh
 Typical agent workflow:
 
 1. Load context at task start:
-  - `memory_project_context(project)`
+  - `memory_start_session(project, cwd, query, file_paths)`
 2. Query details during task:
+  - `memory_task_context(query, ...)`
   - `memory_search(query, ...)`
-  - `memory_by_date(date, ...)`
+  - `memory_open_loops(...)`
 3. Persist outcome at task end:
-  - `memory_store_summary(summary, project, tags, ...)`
+  - `memory_store_structured(...)`
+  - or `memory_store_summary(summary, project, tags, ...)`
+
+Behavior notes:
+- structured memories with `next_step` or `risk` will auto-generate an `open_loop` unless `metadata.auto_open_loop=false`
+- `memory_task_context(...)` uses file overlap plus current git diff overlap when `cwd` points at a git repo
+- wrapper non-zero exits should be captured as `failed_attempt` so future sessions can recover what failed and what to try next
+- supersession is non-destructive: older memories stay in JSONL but normal retrieval hides records marked superseded by a later cleanup event
 
 Minimal write example (JSON-RPC):
 
@@ -115,6 +127,8 @@ Write tool required fields:
 - `memory_add`: `text`
 - `memory_store_summary`: `summary`
 - `memory_meeting_summary`: `text`
+- `memory_open_loop_add`: `title`
+- `memory_open_loop_update`: `loop_id`
 
 Review queue tools:
 
@@ -135,6 +149,24 @@ Graph and health tools:
 - `memory_today_graph`
 - `memory_brain_health`
 - `memory_repair_graph`
+
+Agent-oriented tools:
+
+- `memory_store_structured`
+- `memory_store_failed_attempt`
+- `memory_open_loop_add`
+- `memory_open_loop_update`
+- `memory_open_loops`
+- `memory_promote_canon`
+- `memory_mark_superseded`
+- `memory_start_session`
+- `memory_task_context`
+- `memory_project_canon`
+- `memory_machine_context`
+- `memory_execution_hints`
+- `memory_timeline`
+- `memory_quality_report`
+- `memory_cleanup_candidates`
 
 ## Validation behavior
 
